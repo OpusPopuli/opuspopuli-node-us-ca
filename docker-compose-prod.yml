@@ -1,0 +1,555 @@
+# =============================================================================
+# Docker Compose — Production (Mac Studio M4 Max + Cloudflare)
+# =============================================================================
+#
+# Runs on the Mac Studio behind a Cloudflare Tunnel. Frontend is hosted on
+# Cloudflare Pages (not in this compose file).
+#
+# Image source: ghcr.io/opuspopuli/* — built and signed by .github/workflows/
+# release.yml on push to main. The Studio NEVER builds locally; it pulls
+# pre-built, cosign-signed images and runs them. `${TAG:-latest}` defaults to
+# the rolling latest tag; pin to a specific sha-prefixed tag for a hot-fix or
+# rollback (e.g. TAG=sha-abc1234 docker compose -f docker-compose-prod.yml ...).
+#
+# Architecture:
+#   - cloudflared: Encrypted tunnel to Cloudflare edge
+#   - NestJS microservices: API Gateway + 4 subgraph services + 3 workers
+#   - Local PostgreSQL: AI scratch data (manifests, pipeline state, prompts)
+#   - Redis: BullMQ queue + caching
+#   - Observability: Prometheus + Loki + Grafana
+#   - Ollama: Runs NATIVELY on macOS (not Docker) for Metal GPU access
+#
+# Configure via .env.production (see .env.production.example). Runtime secrets
+# (RESEND_API_KEY, R2_*, FEC_API_KEY) come from the local Supabase Vault via
+# the hydration path in apps/backend/src/common/preflight.ts.
+#
+# Usage:
+#   docker compose -f docker-compose-prod.yml pull            # fetch new images
+#   docker compose -f docker-compose-prod.yml up -d           # start the stack
+#   docker compose -f docker-compose-prod.yml down            # stop (volumes kept)
+#   docker compose -f docker-compose-prod.yml logs -f api
+#
+# =============================================================================
+
+x-backend-env: &backend-env
+  NODE_ENV: production
+  PROJECT: opuspopuli
+  VERSION: ${VERSION:-1.0.0}
+  # Supabase Cloud (user-facing data)
+  SUPABASE_URL: ${SUPABASE_URL}
+  SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+  SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+  # Local PostgreSQL (AI scratch data)
+  DATABASE_URL: postgresql://postgres:${LOCAL_DB_PASSWORD:-opuspopuli}@db:5432/opuspopuli
+  PRISMA_CONNECTION_LIMIT: ${PRISMA_CONNECTION_LIMIT:-20}
+  PRISMA_POOL_TIMEOUT: ${PRISMA_POOL_TIMEOUT:-10}
+  RELATIONAL_DB_PROVIDER: postgres
+  RELATIONAL_DB_HOST: db
+  RELATIONAL_DB_PORT: 5432
+  RELATIONAL_DB_USERNAME: postgres
+  RELATIONAL_DB_PASSWORD: ${LOCAL_DB_PASSWORD:-opuspopuli}
+  RELATIONAL_DB_DATABASE: opuspopuli
+  # Redis
+  REDIS_URL: redis://redis:6379
+  # Auth & Security
+  JWT_SECRET: ${JWT_SECRET}
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
+  GATEWAY_CLIENT_ID: api-gateway
+  GATEWAY_HMAC_SECRET: ${GATEWAY_HMAC_SECRET}
+  API_KEYS: ${API_KEYS}
+  # OpenTelemetry distributed tracing
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+  # Secrets via Supabase Vault. The hydration step in apps/backend/src/common/
+  # preflight.ts reads the secrets named in VAULT_BACKED_SECRETS and writes
+  # them into process.env before any AppModule is loaded. Vault values
+  # overwrite env when the vault secret is present; env values serve as
+  # fallback only when the vault secret is absent (used during incremental
+  # migration before each secret is seeded in the prod Supabase Cloud vault).
+  # Once a secret is seeded in vault, its env passthrough below becomes
+  # dead code and can be removed in a follow-up. See
+  # docs/guides/secrets-management.md and issues #786 / #792.
+  SECRETS_PROVIDER: supabase
+  # Email
+  RESEND_API_KEY: ${RESEND_API_KEY}
+  SMTP_HOST: ${SMTP_HOST:-smtp.resend.com}
+  SMTP_PORT: ${SMTP_PORT:-465}
+  SMTP_USER: ${SMTP_USER:-resend}
+  SMTP_PASS: ${SMTP_PASS}
+  SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-noreply@opuspopuli.org}
+  FRONTEND_URL: ${FRONTEND_URL:-https://opuspopuli.org}
+
+x-healthcheck: &healthcheck
+  test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+  interval: 15s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
+
+services:
+  # ---------------------------------------------------------------------------
+  # Cloudflare Tunnel
+  #
+  # Gated behind the `public` profile so `docker compose up -d` brings up the
+  # stack *without* cloudflared by default. Pass `--profile public` to start
+  # the tunnel. This lets operators run the node locally (frontend on LAN /
+  # Tailscale, no public exposure) without needing a Tunnel token at all,
+  # and lets `create-op-node bootstrap --local-only` skip the cloudflared
+  # service cleanly. For production deployment, `bootstrap` activates the
+  # `public` profile by default.
+  # ---------------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:2026.2.0
+    container_name: opuspopuli-prod-cloudflared
+    profiles: [public]
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+
+  # ---------------------------------------------------------------------------
+  # Local PostgreSQL — AI scratch data
+  # ---------------------------------------------------------------------------
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: opuspopuli-prod-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:-opuspopuli}
+      POSTGRES_DB: opuspopuli
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # Redis
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: opuspopuli-prod-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  # ---------------------------------------------------------------------------
+  # Database Migrations
+  # ---------------------------------------------------------------------------
+  db-migrate:
+    image: ghcr.io/opuspopuli/db-migrate:${TAG:-latest}
+    container_name: opuspopuli-prod-db-migrate
+    environment:
+      <<: *backend-env
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["/usr/local/bin/db-migrate.sh"]
+    networks:
+      - opuspopuli-prod
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # NestJS Microservices
+  # ---------------------------------------------------------------------------
+  users:
+    image: ghcr.io/opuspopuli/users:${TAG:-latest}
+    container_name: opuspopuli-prod-users
+    environment:
+      <<: *backend-env
+      APPLICATION: users
+      DESCRIPTION: Users microservice
+      PORT: 8080
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck: *healthcheck
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  documents:
+    image: ghcr.io/opuspopuli/documents:${TAG:-latest}
+    container_name: opuspopuli-prod-documents
+    environment:
+      <<: *backend-env
+      APPLICATION: documents
+      DESCRIPTION: Documents microservice
+      PORT: 8080
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck: *healthcheck
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  knowledge:
+    image: ghcr.io/opuspopuli/knowledge:${TAG:-latest}
+    container_name: opuspopuli-prod-knowledge
+    environment:
+      <<: *backend-env
+      APPLICATION: knowledge
+      DESCRIPTION: Knowledge microservice
+      PORT: 8080
+      # Ollama runs natively on macOS for Metal GPU acceleration
+      LLM_URL: http://host.docker.internal:11434
+      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck: *healthcheck
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  region:
+    image: ghcr.io/opuspopuli/region:${TAG:-latest}
+    container_name: opuspopuli-prod-region
+    environment:
+      <<: *backend-env
+      APPLICATION: region
+      DESCRIPTION: Region microservice
+      PORT: 8080
+      LLM_URL: http://host.docker.internal:11434
+      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
+      REGION_SYNC_ENABLED: "true"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck: *healthcheck
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  region-worker:
+    image: ghcr.io/opuspopuli/region-worker:${TAG:-latest}
+    container_name: opuspopuli-prod-region-worker
+    environment:
+      <<: *backend-env
+      APPLICATION: region-worker
+      DESCRIPTION: Region worker (async job processor)
+      PORT: 8080
+      REGION_WORKER_PORT: 8080
+      LLM_URL: http://host.docker.internal:11434
+      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
+      REGION_SYNC_ENABLED: "true"
+      REGION_SYNC_CRON_ENABLED: "true"
+      REGION_SYNC_CRON_VIA_QUEUE: "true"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    healthcheck: *healthcheck
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 6G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  structural-analysis-worker:
+    image: ghcr.io/opuspopuli/structural-analysis-worker:${TAG:-latest}
+    container_name: opuspopuli-prod-structural-analysis-worker
+    environment:
+      <<: *backend-env
+      APPLICATION: structural-analysis-worker
+      DESCRIPTION: Structural analysis worker (async manifest analysis)
+      PORT: 8080
+      STRUCTURAL_ANALYSIS_WORKER_PORT: 8080
+      LLM_URL: http://host.docker.internal:11434
+      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    healthcheck: *healthcheck
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  llm-rerank-worker:
+    image: ghcr.io/opuspopuli/llm-rerank-worker:${TAG:-latest}
+    container_name: opuspopuli-prod-llm-rerank-worker
+    environment:
+      <<: *backend-env
+      APPLICATION: llm-rerank-worker
+      DESCRIPTION: LLM re-rank worker (personalized feed nightly batch, opuspopuli#745)
+      PORT: 8080
+      LLM_RERANK_WORKER_PORT: 8080
+      LLM_URL: http://host.docker.internal:11434
+      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
+      PROMPT_SERVICE_URL: ${PROMPT_SERVICE_URL}
+      PROMPT_SERVICE_API_KEY: ${PROMPT_SERVICE_API_KEY}
+      LLM_RERANK_CRON_ENABLED: ${LLM_RERANK_CRON_ENABLED:-true}
+      LLM_RERANK_CRON_PATTERN: ${LLM_RERANK_CRON_PATTERN:-0 3 * * *}
+      # Daily token budget per user — when exhausted, the rerank falls
+      # back to embedding-only cache rows (no LLM call). Raise for users
+      # with deep candidate pools.
+      LLM_RERANK_PER_USER_DAILY_TOKEN_CAP: ${LLM_RERANK_PER_USER_DAILY_TOKEN_CAP:-10000}
+      # Threshold after which a RUNNING llm_rerank_jobs row is presumed
+      # dead and swept to FAILED on worker startup. Default 10 min;
+      # raise to accommodate slow Ollama models or large candidate sets.
+      LLM_RERANK_JOB_STALE_AGE_MS: ${LLM_RERANK_JOB_STALE_AGE_MS:-600000}
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    healthcheck: *healthcheck
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  api:
+    image: ghcr.io/opuspopuli/api:${TAG:-latest}
+    container_name: opuspopuli-prod-api
+    environment:
+      <<: *backend-env
+      APPLICATION: api
+      DESCRIPTION: API Gateway
+      PORT: 8080
+      MICROSERVICES: '[{"name":"users","url":"http://users:8080/graphql"},{"name":"documents","url":"http://documents:8080/graphql"},{"name":"knowledge","url":"http://knowledge:8080/graphql"},{"name":"region","url":"http://region:8080/graphql"}]'
+    ports:
+      - "8080:8080"
+    depends_on:
+      users:
+        condition: service_healthy
+      documents:
+        condition: service_healthy
+      knowledge:
+        condition: service_healthy
+      region:
+        condition: service_healthy
+    healthcheck: *healthcheck
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Observability
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: opuspopuli-prod-prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus-alerts.yml:/etc/prometheus/alerts/prometheus-alerts.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  loki:
+    image: grafana/loki:3.4.2
+    container_name: opuspopuli-prod-loki
+    volumes:
+      - ./observability/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  promtail:
+    image: grafana/promtail:3.4.2
+    container_name: opuspopuli-prod-promtail
+    volumes:
+      - ./observability/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+
+  tempo:
+    image: grafana/tempo:2.7.2
+    container_name: opuspopuli-prod-tempo
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./observability/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: opuspopuli-prod-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3101:3000"  # Local access only
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    networks:
+      - opuspopuli-prod
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+networks:
+  opuspopuli-prod:
+    name: opuspopuli-prod
+
+volumes:
+  postgres-data:
+  redis-data:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  grafana-data:

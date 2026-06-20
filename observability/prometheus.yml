@@ -1,0 +1,71 @@
+# Prometheus Configuration
+# Scrapes metrics from OPUSPOPULI microservices
+#
+# @see https://github.com/OpusPopuli/opuspopuli/issues/213
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts/*.yml
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # API Gateway metrics
+  - job_name: 'api-gateway'
+    static_configs:
+      - targets: ['host.docker.internal:4000']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Users Service metrics
+  - job_name: 'users-service'
+    static_configs:
+      - targets: ['host.docker.internal:4001']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Documents Service metrics
+  - job_name: 'documents-service'
+    static_configs:
+      - targets: ['host.docker.internal:4002']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Knowledge Service metrics
+  - job_name: 'knowledge-service'
+    static_configs:
+      - targets: ['host.docker.internal:4003']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Region Service metrics
+  - job_name: 'region-service'
+    static_configs:
+      - targets: ['host.docker.internal:4004']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Region Worker metrics
+  - job_name: 'region-worker'
+    static_configs:
+      - targets: ['host.docker.internal:4005']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Structural Analysis Worker metrics
+  - job_name: 'structural-analysis-worker'
+    static_configs:
+      - targets: ['host.docker.internal:4006']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # Redis metrics (if redis_exporter is added)
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']

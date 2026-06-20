@@ -1,0 +1,57 @@
+# Promtail Configuration
+# Ships container logs to Loki
+#
+# @see https://github.com/OpusPopuli/opuspopuli/issues/213
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Scrape Docker container logs
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Only collect logs from containers with opuspopuli prefix
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/opuspopuli-.*'
+        action: keep
+      # Extract container name as label
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      # Extract service name from container name (strip opuspopuli- prefix)
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/opuspopuli-(.*)'
+        target_label: service
+      # Add compose project label
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: compose_project
+      # Add compose service label
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: compose_service
+    pipeline_stages:
+      # Try to parse JSON logs (NestJS structured logging)
+      - json:
+          expressions:
+            level: level
+            message: message
+            context: context
+            timestamp: timestamp
+            traceId: traceId
+      # If JSON parsing fails, use the raw log
+      - output:
+          source: message
+      # Add log level and trace ID as labels if parsed
+      - labels:
+          level:
+          context:
+          traceId:

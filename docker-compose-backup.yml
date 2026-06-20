@@ -1,0 +1,97 @@
+# Backup overlay for the opuspopuli stack.
+#
+# Single env-agnostic compose file used in every environment (local
+# dev, UAT, Mac Studio production). Env-specific values flow through
+# env vars / .env files — see .env.backup.example for the contract.
+#
+# Brought up as an overlay alongside whichever app stack is running:
+#
+#   Local dev:
+#     docker compose -f docker-compose.yml \
+#                    -f docker-compose-backup.yml \
+#                    --env-file .env.backup \
+#                    up -d opuspopuli-backup
+#
+#   UAT:
+#     docker compose -f docker-compose-uat.yml \
+#                    -f docker-compose-backup.yml \
+#                    --env-file .env.backup \
+#                    up -d opuspopuli-backup
+#
+#   Mac Studio production:
+#     docker compose -f docker-compose-prod.yml \
+#                    -f docker-compose-backup.yml \
+#                    --env-file .env.backup.prod \
+#                    up -d opuspopuli-backup
+#
+# Ad-hoc commands use the same overlay, swapping `up -d` for `run --rm`:
+#
+#   Manual backup (works even if the scheduler container is down):
+#     docker compose -f docker-compose-uat.yml \
+#                    -f docker-compose-backup.yml \
+#                    --env-file .env.backup \
+#                    run --rm opuspopuli-backup /scripts/backup-db.sh
+#
+#   Restore (quick — assumes schema matches snapshot):
+#     docker compose -f docker-compose-uat.yml \
+#                    -f docker-compose-backup.yml \
+#                    --env-file .env.backup \
+#                    run --rm opuspopuli-backup \
+#                    /scripts/restore-db.sh --quick \
+#                    /backups/opuspopuli-db-<sha>-<ts>.dump.gz
+#
+# See docs/guides/backup-recovery.md for the full operator guide.
+
+services:
+  opuspopuli-backup:
+    build:
+      context: ./backup
+      dockerfile: Dockerfile
+      args:
+        SUPERCRONIC_VERSION: ${SUPERCRONIC_VERSION:-v0.2.31}
+    container_name: opuspopuli-backup
+    depends_on:
+      opuspopuli-db:
+        condition: service_healthy
+    environment:
+      # DB connection — defaults match opuspopuli-db across all envs.
+      PGHOST: ${BACKUP_PGHOST:-opuspopuli-db}
+      PGUSER: ${BACKUP_PGUSER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      PGDATABASE: ${BACKUP_PGDATABASE:-postgres}
+      # Schema version tag baked into snapshot filenames so restore can
+      # detect drift between snapshot-time and restore-time code.
+      GIT_SHA: ${GIT_SHA:-unknown}
+      # Where the container writes snapshots — bind-mounted from host.
+      BACKUPS_DIR: /backups
+      # How many days of snapshots to retain. Older files are deleted
+      # by the daily run after a successful pg_dump.
+      RETENTION_DAYS: ${RETENTION_DAYS:-7}
+      # Cron timezone — 03:00 in this TZ is when the scheduled backup
+      # fires. supercronic respects the TZ env var.
+      TZ: ${TZ:-America/Los_Angeles}
+      # If true, ad-hoc runs block waiting for the scheduled run to
+      # finish. If false, they fail fast when the lock is held.
+      BACKUP_LOCK_WAIT: ${BACKUP_LOCK_WAIT:-true}
+    volumes:
+      # Host path holding the snapshots. The :? syntax fails the
+      # `compose up` command at start time with a clear error if
+      # the var isn't set — surfaces operator misconfiguration
+      # immediately rather than silently bind-mounting an anonymous
+      # volume that would vanish on container teardown.
+      - ${BACKUPS_DIR_HOST:?BACKUPS_DIR_HOST must be set — see .env.backup.example}:/backups
+      # Scripts bind-mounted read-only from the repo so iteration
+      # during development doesn't require a container rebuild.
+      # Production deployments can omit this and rely on the baked-in
+      # copy from the image (the Dockerfile COPYs the same files).
+      - ./backup/scripts:/scripts:ro
+    networks:
+      - opuspopuli-network
+    restart: unless-stopped
+
+# Reuses the existing opuspopuli-network defined by the main compose
+# file. Declared as external so this overlay does not create a
+# duplicate network when brought up alongside an existing stack.
+networks:
+  opuspopuli-network:
+    external: true

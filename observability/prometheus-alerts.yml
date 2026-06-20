@@ -1,0 +1,90 @@
+# Prometheus Alerting Rules for OPUSPOPULI
+# @see https://github.com/OpusPopuli/opuspopuli/issues/308
+
+groups:
+  - name: opuspopuli-service-health
+    rules:
+      # Alert when a scrape target is unreachable for 2 minutes
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} has been unreachable for more than 2 minutes."
+
+      # Alert when HTTP error rate exceeds 5% over 5 minutes
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code=~"5.."}[5m])) by (service)
+            /
+            sum(rate(http_requests_total[5m])) by (service)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate on {{ $labels.service }}"
+          description: "{{ $labels.service }} has >5% HTTP 5xx error rate (current: {{ $value | humanizePercentage }})."
+
+  - name: opuspopuli-document-pipeline
+    rules:
+      # Alert when OCR failure rate spikes (>10% over 10 minutes)
+      - alert: OcrFailureSpike
+        expr: |
+          (
+            sum(rate(ocr_extractions_total{status="failure"}[10m])) by (service)
+            /
+            sum(rate(ocr_extractions_total[10m])) by (service)
+          ) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OCR failure rate spiking on {{ $labels.service }}"
+          description: "OCR failure rate >10% for 5 minutes (current: {{ $value | humanizePercentage }})."
+
+      # Alert when scan failure rate exceeds 5%
+      - alert: HighScanFailureRate
+        expr: |
+          (
+            sum(rate(document_scans_total{status="failure"}[10m])) by (service)
+            /
+            sum(rate(document_scans_total[10m])) by (service)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High scan failure rate on {{ $labels.service }}"
+          description: "Scan failure rate >5% for 5 minutes (current: {{ $value | humanizePercentage }})."
+
+      # Alert when scan processing p95 latency exceeds 5 seconds
+      - alert: HighScanLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(document_scan_duration_seconds_bucket[5m])) by (service, le)
+          ) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High scan latency on {{ $labels.service }}"
+          description: "p95 scan processing latency >5s (current: {{ $value | humanizeDuration }})."
+
+      # Alert when analysis failure rate exceeds 10%
+      - alert: HighAnalysisFailureRate
+        expr: |
+          (
+            sum(rate(document_analyses_total{status="failure"}[10m])) by (service)
+            /
+            sum(rate(document_analyses_total[10m])) by (service)
+          ) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High AI analysis failure rate on {{ $labels.service }}"
+          description: "AI analysis failure rate >10% for 5 minutes (current: {{ $value | humanizePercentage }})."

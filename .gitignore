@@ -1,0 +1,32 @@
+# Terraform local state + cache (state lives in Terraform Cloud)
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+plan.txt
+plan.trimmed.txt
+crash.log
+crash.*.log
+
+# Local secret material — never commit
+.env
+.env.local
+.env.production
+*.pem
+*.key
+secrets/
+
+# macOS / editor cruft
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# 1Password CLI ephemera
+.op-session
+
+# Local backup staging (R2 is the source of truth)
+backup/staging/
+db-backups/

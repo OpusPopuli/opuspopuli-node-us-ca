@@ -1,0 +1,187 @@
+# =============================================================================
+# Cloudflare Infra — Terraform plan + apply
+# =============================================================================
+#
+# On PR touching `infra/cloudflare/**`:
+#   - `terraform plan` runs, the diff posts as a PR comment.
+#
+# On push to `main` touching `infra/cloudflare/**`:
+#   - `terraform apply` runs against the `prod` workspace.
+#
+# On manual workflow_dispatch:
+#   - Operator picks the environment + whether to apply.
+#
+# Terraform state lives in your region's Terraform Cloud workspace. State,
+# locking, and apply history are all handled by TFC; this workflow just drives
+# plan / apply via the TFC API token.
+#
+# Required GitHub Secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN     — Account API token, 5 scopes (see README.md)
+#   CLOUDFLARE_ACCOUNT_ID    — From Cloudflare dashboard right sidebar
+#   CLOUDFLARE_ZONE_ID       — From your domain's Overview page right sidebar
+#   TF_API_TOKEN             — Terraform Cloud user/team API token
+#   TF_CLOUD_ORGANIZATION    — Your TFC organization name
+#
+# See README.md for the full operator setup procedure.
+# =============================================================================
+
+name: Cloudflare Infra
+
+on:
+  pull_request:
+    paths:
+      - 'infra/cloudflare/**'
+      - '.github/workflows/cloudflare-infra.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/cloudflare/**'
+      - '.github/workflows/cloudflare-infra.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Workspace to target'
+        required: true
+        type: choice
+        options:
+          - prod
+        default: prod
+      apply:
+        description: 'Apply (unchecked = plan only)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: cloudflare-infra-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'prod' }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: '1.10.5'
+  TF_IN_AUTOMATION: 'true'
+  TF_INPUT: 'false'
+  TF_CLOUD_ORGANIZATION: ${{ secrets.TF_CLOUD_ORGANIZATION }}
+  TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+
+jobs:
+  terraform:
+    name: terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/cloudflare
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Resolve workspace
+        id: ws
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ inputs.environment }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=prod" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve mode
+        id: act
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "mode=plan" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "mode=apply" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.apply }}" = "true" ]; then
+            echo "mode=apply" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=plan" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Verify prod.tfvars exists
+        run: |
+          if [ ! -f "environments/${{ steps.ws.outputs.name }}.tfvars" ]; then
+            echo "::error::environments/${{ steps.ws.outputs.name }}.tfvars not found. Copy from prod.tfvars.example and commit it (or pass values via TF_VAR_* env)."
+            exit 1
+          fi
+
+      - name: terraform init
+        run: terraform init
+
+      - name: terraform workspace
+        run: |
+          terraform workspace select ${{ steps.ws.outputs.name }} \
+            || terraform workspace new ${{ steps.ws.outputs.name }}
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - name: terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -no-color \
+            -var-file=environments/${{ steps.ws.outputs.name }}.tfvars \
+            -out=tfplan 2>&1 | tee plan.txt
+          EXIT=${PIPESTATUS[0]}
+          set -e
+          tail -c 60000 plan.txt > plan.trimmed.txt
+          echo "exit_code=$EXIT" >> "$GITHUB_OUTPUT"
+          exit $EXIT
+
+      - name: Post plan to PR
+        if: github.event_name == 'pull_request' && always() && hashFiles('infra/cloudflare/plan.trimmed.txt') != ''
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const plan = fs.readFileSync(
+              path.join('infra/cloudflare', 'plan.trimmed.txt'),
+              'utf8'
+            );
+            const env = '${{ steps.ws.outputs.name }}';
+            const status = '${{ steps.plan.outputs.exit_code }}' === '0'
+              ? '✅ plan succeeded'
+              : '❌ plan failed';
+            const body = [
+              `### Terraform plan — \`${env}\` workspace`,
+              '',
+              status,
+              '',
+              '<details><summary>Plan output (trimmed to last 60k chars)</summary>',
+              '',
+              '```hcl',
+              plan,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const marker = '### Terraform plan — `' + env + '` workspace';
+            const comments = await github.rest.issues.listComments({
+              owner, repo, issue_number, per_page: 100,
+            });
+            for (const c of comments.data) {
+              if (c.user.login === 'github-actions[bot]' && c.body.startsWith(marker)) {
+                await github.rest.issues.deleteComment({ owner, repo, comment_id: c.id });
+              }
+            }
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+
+      - name: terraform apply
+        if: steps.act.outputs.mode == 'apply'
+        run: terraform apply -no-color -input=false tfplan

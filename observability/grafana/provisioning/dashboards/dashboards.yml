@@ -1,0 +1,17 @@
+# Grafana Dashboard Provisioning
+# Auto-loads dashboards from the dashboards folder
+#
+# @see https://github.com/OpusPopuli/opuspopuli/issues/213
+
+apiVersion: 1
+
+providers:
+  - name: 'OPUSPOPULI Dashboards'
+    orgId: 1
+    folder: 'OPUSPOPULI'
+    folderUid: 'opuspopuli'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

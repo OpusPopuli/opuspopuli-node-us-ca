@@ -1,0 +1,38 @@
+# =============================================================================
+# Production environment — REGION-SPECIFIC
+# =============================================================================
+#
+# Copy to prod.tfvars (gitignored) and edit per your region. Defaults in
+# variables.tf assume the OpusPopuli reference region (opuspopuli.org); change
+# anything region-specific below.
+#
+# Usage:
+#   cp prod.tfvars.example prod.tfvars
+#   <edit prod.tfvars>
+# =============================================================================
+
+# Project name — used as a resource-name prefix (e.g. "<project>-tunnel-prod").
+project = "opuspopuli"
+
+# The base domain you own and have already added to Cloudflare.
+domain_name = "yourdomain.example"
+
+# Subdomain for the Cloudflare Tunnel → Mac Studio API Gateway.
+# Final URL: api.<domain_name>
+api_subdomain = "api"
+
+# Subdomain for Cloudflare Pages (frontend).
+# Final URL: app.<domain_name>
+app_subdomain = "app"
+
+# Local port the API Gateway listens on inside the Studio.
+tunnel_api_port = 8080
+
+# R2 region hint (closest data center).
+# WNAM = Western North America. EEU/ENAM/APAC/ME are other valid values.
+r2_location_hint = "WNAM"
+
+# Feature toggles — all true for a full production region.
+enable_tunnel   = true
+enable_frontend = true
+enable_r2       = true
