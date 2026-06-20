@@ -121,9 +121,29 @@ services:
 
   # ---------------------------------------------------------------------------
   # Local PostgreSQL — AI scratch data
+  #
+  # Uses Supabase's Postgres image because the platform is built around the
+  # Supabase ecosystem (auth via GoTrue, secrets via supabase_vault,
+  # storage via PostgREST). This image ships ALL the extensions the
+  # baseline migration declares:
+  #   - pgvector       (knowledge service embeddings)
+  #   - PostGIS        (civic geography: addresses, district polygons,
+  #                     polling places)
+  #   - pgsodium       (the master encryption key the LaunchAgent injects
+  #                     as PGSODIUM_ROOT_KEY)
+  #   - supabase_vault (operator-rotatable secret storage at the DB layer)
+  #   - pg_graphql, pg_jsonschema, pg_cron, pg_net, pgaudit
+  #
+  # The community pgvector image doesn't ship most of these — first
+  # bootstrap of every region fails with `type "geography" does not
+  # exist` and a string of extension-missing errors.
+  #
+  # Pinned to the current pg17 stable. Tag format is
+  # `<pg-major>.<pg-minor>.<supabase-build>` — update in lockstep with
+  # the upstream self-hosted Supabase release cadence.
   # ---------------------------------------------------------------------------
   db:
-    image: pgvector/pgvector:pg16
+    image: supabase/postgres:17.6.1.138
     container_name: opuspopuli-prod-db
     environment:
       POSTGRES_USER: postgres
