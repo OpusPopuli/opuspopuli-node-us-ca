@@ -190,7 +190,11 @@ docker-compose-prod.yml                   Production stack (pulls ghcr.io)
 docker-compose-backup.yml                 Nightly pg_dump → R2 overlay
 backup/                                   Backup container Dockerfile + scripts
 observability/                            Prometheus + Grafana + Loki + Tempo configs
-supabase/init/pgsodium_getkey_env.sh      Bind-mounted into the db container
+environments/.env.production.example      Reference doc of every env var (Keychain-managed; see file header)
+supabase/init/
+  pgsodium_getkey_env.sh                  Bind-mounted into db container (key persistence)
+  sql/                                    Init SQL (roles, JWT GUCs, _supabase, webhooks)
+  kong/                                   Kong declarative config + entrypoint
 scripts/
   mac-studio-setup.sh                     One-shot Studio bootstrap
   start-prod.sh                           Health-check + pull + up

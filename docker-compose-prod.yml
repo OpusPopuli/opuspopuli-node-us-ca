@@ -40,14 +40,14 @@ x-backend-env: &backend-env
   SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
   SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
   # Local PostgreSQL (AI scratch data)
-  DATABASE_URL: postgresql://postgres:${LOCAL_DB_PASSWORD:-opuspopuli}@db:5432/opuspopuli
+  DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/opuspopuli
   PRISMA_CONNECTION_LIMIT: ${PRISMA_CONNECTION_LIMIT:-20}
   PRISMA_POOL_TIMEOUT: ${PRISMA_POOL_TIMEOUT:-10}
   RELATIONAL_DB_PROVIDER: postgres
   RELATIONAL_DB_HOST: db
   RELATIONAL_DB_PORT: 5432
   RELATIONAL_DB_USERNAME: postgres
-  RELATIONAL_DB_PASSWORD: ${LOCAL_DB_PASSWORD:-opuspopuli}
+  RELATIONAL_DB_PASSWORD: ${POSTGRES_PASSWORD}
   RELATIONAL_DB_DATABASE: opuspopuli
   # Redis
   REDIS_URL: redis://redis:6379
@@ -147,10 +147,35 @@ services:
     container_name: opuspopuli-prod-db
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:-opuspopuli}
-      POSTGRES_DB: opuspopuli
+      # No `:-` fallback on secret values. Hydrated by `create-op-node
+      # bootstrap` via launchd setenv (read from macOS Keychain). If the
+      # operator's shell predates the LaunchAgent load, compose will
+      # hard-fail with "variable is not set" instead of silently coming
+      # up with a well-known weak password.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — run create-op-node bootstrap and reopen your shell}
+      POSTGRES_DB: ${POSTGRES_DB:-opuspopuli}
+      # Supabase init scripts read these — exported in the launchd session
+      # by `create-op-node bootstrap` and also picked up here for explicit
+      # values during first-boot DB initialization. `:?` form hard-fails
+      # if missing — see POSTGRES_PASSWORD comment above for the rationale.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required — run create-op-node bootstrap}
+      JWT_EXP: ${JWT_EXPIRY:-3600}
+      PGSODIUM_ROOT_KEY: ${PGSODIUM_ROOT_KEY:?PGSODIUM_ROOT_KEY is required — run create-op-node bootstrap}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # Mount Supabase init scripts into the postgres entrypoint's
+      # init-scripts dir. These run on FIRST boot (empty data dir only).
+      # 00-opuspopuli-roles ensures supabase_admin exists before any other
+      # script depends on it.
+      - ./supabase/init/sql/00-opuspopuli-roles.sql:/docker-entrypoint-initdb.d/init-scripts/00-opuspopuli-roles.sql:ro
+      - ./supabase/init/sql/00-roles.sql:/docker-entrypoint-initdb.d/init-scripts/01-roles.sql:ro
+      - ./supabase/init/sql/01-jwt.sql:/docker-entrypoint-initdb.d/init-scripts/02-jwt.sql:ro
+      - ./supabase/init/sql/02-_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:ro
+      - ./supabase/init/sql/03-realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:ro
+      - ./supabase/init/sql/04-webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/99-webhooks.sql:ro
+      # Bind-mount our env-driven pgsodium getkey script over the image
+      # default so the master key survives container recreations (#791).
+      - ./supabase/init/pgsodium_getkey_env.sh:/usr/lib/postgresql/bin/pgsodium_getkey.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -167,6 +192,207 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # Supabase — self-hosted stack
+  #
+  # The platform's services (knowledge, users, documents) talk to Supabase via
+  # @supabase/supabase-js. SUPABASE_URL must resolve to a Kong gateway that
+  # routes to gotrue (auth), postgrest (REST), storage-api, postgres-meta,
+  # etc. Without this stack, services with AUTH_PROVIDER=supabase have
+  # nothing to call into and fail at startup.
+  #
+  # Trimmed from upstream Supabase's official self-hosted docker-compose:
+  # OUT: edge-runtime (we use NestJS), supavisor (single-tenant pool not
+  # needed), realtime (Apollo subscriptions cover live updates), analytics/
+  # logflare (we use Prometheus + Loki + Grafana from observability/).
+  # IN: kong, auth, rest, storage, meta. Studio is optional (public profile).
+  # ---------------------------------------------------------------------------
+
+  kong:
+    image: kong/kong:3.9.1
+    container_name: opuspopuli-prod-kong
+    restart: unless-stopped
+    # Publish kong on the host so SUPABASE_URL=http://localhost:8000 works
+    # for browsers + platform services running outside this compose, and
+    # so the Cloudflare Tunnel (cloudflared on the host) can reach it.
+    # 8000 = HTTP proxy listener; 8443 = HTTPS proxy listener.
+    ports:
+      - '${KONG_HTTP_PORT:-8000}:8000/tcp'
+      - '${KONG_HTTPS_PORT:-8443}:8443/tcp'
+    networks:
+      opuspopuli-prod:
+        aliases:
+          - api-gw
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./supabase/init/kong/kong.yml:/home/kong/temp.yml:ro
+      - ./supabase/init/kong/kong-entrypoint.sh:/home/kong/kong-entrypoint.sh:ro
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /usr/local/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_DNS_NOT_FOUND_TTL: 1
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth,request-termination,ip-restriction,post-function
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      KONG_PROXY_ACCESS_LOG: /dev/stdout combined
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:?SUPABASE_ANON_KEY is required — run create-op-node bootstrap}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:?SUPABASE_SERVICE_ROLE_KEY is required — run create-op-node bootstrap}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-supabase}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?DASHBOARD_PASSWORD is required — run create-op-node bootstrap}
+    entrypoint: ["/bin/sh", "/home/kong/kong-entrypoint.sh"]
+
+  auth:
+    image: supabase/gotrue:v2.189.0
+    container_name: opuspopuli-prod-auth
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - opuspopuli-prod
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${SUPABASE_URL}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opuspopuli}
+      GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:3000}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS:-}
+      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP:-false}
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_EXP: ${JWT_EXPIRY:-3600}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_ISSUER: ${SUPABASE_URL}/auth/v1
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: ${ENABLE_EMAIL_SIGNUP:-true}
+      GOTRUE_MAILER_AUTOCONFIRM: ${ENABLE_EMAIL_AUTOCONFIRM:-true}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-admin@example.com}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-supabase-mail}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-2500}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-fake_mail_user}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-fake_mail_password}
+      GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-Opus Populi}
+
+  rest:
+    image: postgrest/postgrest:v14.12
+    container_name: opuspopuli-prod-rest
+    restart: unless-stopped
+    # postgrest doesn't ship wget/curl/nc in its distroless image, so we
+    # probe the admin /live endpoint (port 3001) by talking to its TCP
+    # socket via /proc/net/tcp. Simpler alternative: enable the optional
+    # /live endpoint on the main port via PGRST_ADMIN_SERVER_PORT and
+    # use a shell with curl — but that means a fatter image. We use the
+    # admin server here (PGRST_ADMIN_SERVER_PORT=3001) and have docker
+    # exec the postgrest binary's --dump-config as the liveness signal,
+    # which exits 0 iff the process can read its own config.
+    healthcheck:
+      test: ["CMD", "postgrest", "--dump-config"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - opuspopuli-prod
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opuspopuli}
+      PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS:-public,storage,graphql_public}
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: ${JWT_EXPIRY:-3600}
+    command: "postgrest"
+
+  storage:
+    image: supabase/storage-api:v1.60.4
+    container_name: opuspopuli-prod-storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      db:
+        condition: service_healthy
+      rest:
+        condition: service_healthy
+    networks:
+      - opuspopuli-prod
+    volumes:
+      - storage-data:/var/lib/storage:z
+    environment:
+      ANON_KEY: ${SUPABASE_ANON_KEY}
+      SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opuspopuli}
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      GLOBAL_S3_BUCKET: stub
+
+  meta:
+    image: supabase/postgres-meta:v0.96.6
+    container_name: opuspopuli-prod-meta
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - opuspopuli-prod
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: ${POSTGRES_DB:-opuspopuli}
+      PG_META_DB_USER: supabase_admin
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+
+  # Optional admin UI — behind `studio` compose profile so it stays down
+  # unless explicitly enabled. Useful when you need to inspect tables or
+  # tweak RLS during development. Not needed for production traffic.
+  studio:
+    image: supabase/studio:2026.06.03-sha-0bca601
+    container_name: opuspopuli-prod-studio
+    profiles: [studio]
+    restart: unless-stopped
+    depends_on:
+      meta:
+        condition: service_started
+    networks:
+      - opuspopuli-prod
+    environment:
+      HOSTNAME: "0.0.0.0"
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DEFAULT_ORGANIZATION_NAME: ${STUDIO_DEFAULT_ORGANIZATION:-Opus Populi}
+      DEFAULT_PROJECT_NAME: ${STUDIO_DEFAULT_PROJECT:-Region Node}
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: ${SUPABASE_URL}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      AUTH_JWT_SECRET: ${JWT_SECRET}
 
   # ---------------------------------------------------------------------------
   # Redis
@@ -573,3 +799,4 @@ volumes:
   loki-data:
   tempo-data:
   grafana-data:
+  storage-data:
