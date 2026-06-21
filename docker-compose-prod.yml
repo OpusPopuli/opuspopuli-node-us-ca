@@ -163,11 +163,18 @@ services:
       PGSODIUM_ROOT_KEY: ${PGSODIUM_ROOT_KEY:?PGSODIUM_ROOT_KEY is required — run create-op-node bootstrap}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      # Mount Supabase init scripts into the postgres entrypoint's
-      # init-scripts dir. These run on FIRST boot (empty data dir only).
-      # 00-opuspopuli-roles ensures supabase_admin exists before any other
-      # script depends on it.
-      - ./supabase/init/sql/00-opuspopuli-roles.sql:/docker-entrypoint-initdb.d/init-scripts/00-opuspopuli-roles.sql:ro
+      # TOP-LEVEL: pre-create `supabase_admin` BEFORE migrate.sh runs.
+      # The image's migrate.sh opens with `psql -U supabase_admin` and
+      # assumes the role exists (it's pre-created during AMI build, but
+      # not on a fresh Docker named volume). Without this, migrate.sh's
+      # init-scripts loop never gets a chance to run. See the file
+      # header for the full rationale.
+      - ./supabase/init/sql/00-create-supabase-admin.sql:/docker-entrypoint-initdb.d/00-create-supabase-admin.sql:ro
+
+      # init-scripts/ subdir: processed by the image's migrate.sh, AS the
+      # `postgres` role, after supabase_admin exists. Runs on FIRST boot
+      # only (sequenced alphabetically; image's own 00-schema.sql,
+      # 00000000000000-initial-schema.sql, etc. interleave with ours).
       - ./supabase/init/sql/00-roles.sql:/docker-entrypoint-initdb.d/init-scripts/01-roles.sql:ro
       - ./supabase/init/sql/01-jwt.sql:/docker-entrypoint-initdb.d/init-scripts/02-jwt.sql:ro
       - ./supabase/init/sql/02-_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:ro
@@ -292,20 +299,12 @@ services:
     image: postgrest/postgrest:v14.12
     container_name: opuspopuli-prod-rest
     restart: unless-stopped
-    # postgrest doesn't ship wget/curl/nc in its distroless image, so we
-    # probe the admin /live endpoint (port 3001) by talking to its TCP
-    # socket via /proc/net/tcp. Simpler alternative: enable the optional
-    # /live endpoint on the main port via PGRST_ADMIN_SERVER_PORT and
-    # use a shell with curl — but that means a fatter image. We use the
-    # admin server here (PGRST_ADMIN_SERVER_PORT=3001) and have docker
-    # exec the postgrest binary's --dump-config as the liveness signal,
-    # which exits 0 iff the process can read its own config.
-    healthcheck:
-      test: ["CMD", "postgrest", "--dump-config"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
+    # No healthcheck: postgrest ships as a `scratch` image — no shell, no
+    # curl/wget/nc, no `postgrest --dump-config` exec context that Docker
+    # CMD can reliably invoke. Downstream services depend on this via
+    # `service_started` (storage waits for the process to exist, not for
+    # a healthcheck). postgrest's own retry logic handles a not-yet-ready
+    # database without us needing a Compose-level orchestration signal.
     depends_on:
       db:
         condition: service_healthy
@@ -334,7 +333,7 @@ services:
       db:
         condition: service_healthy
       rest:
-        condition: service_healthy
+        condition: service_started
     networks:
       - opuspopuli-prod
     volumes:
