@@ -39,8 +39,11 @@ x-backend-env: &backend-env
   SUPABASE_URL: ${SUPABASE_URL}
   SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
   SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
-  # Local PostgreSQL (AI scratch data)
-  DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/opuspopuli
+  # Local PostgreSQL (AI scratch data). DB name aligned with upstream
+  # supabase convention (`postgres`) — the bundled init scripts hardcode
+  # `ALTER DATABASE postgres SET …` for the JWT_SECRET / JWT_EXP GUCs that
+  # postgrest reads. Using a non-`postgres` DB name silently breaks those.
+  DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
   PRISMA_CONNECTION_LIMIT: ${PRISMA_CONNECTION_LIMIT:-20}
   PRISMA_POOL_TIMEOUT: ${PRISMA_POOL_TIMEOUT:-10}
   RELATIONAL_DB_PROVIDER: postgres
@@ -48,7 +51,7 @@ x-backend-env: &backend-env
   RELATIONAL_DB_PORT: 5432
   RELATIONAL_DB_USERNAME: postgres
   RELATIONAL_DB_PASSWORD: ${POSTGRES_PASSWORD}
-  RELATIONAL_DB_DATABASE: opuspopuli
+  RELATIONAL_DB_DATABASE: ${POSTGRES_DB:-postgres}
   # Redis
   REDIS_URL: redis://redis:6379
   # Auth & Security
@@ -153,7 +156,7 @@ services:
       # hard-fail with "variable is not set" instead of silently coming
       # up with a well-known weak password.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — run create-op-node bootstrap and reopen your shell}
-      POSTGRES_DB: ${POSTGRES_DB:-opuspopuli}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
       # Supabase init scripts read these — exported in the launchd session
       # by `create-op-node bootstrap` and also picked up here for explicit
       # values during first-boot DB initialization. `:?` form hard-fails
@@ -276,7 +279,7 @@ services:
       GOTRUE_API_PORT: 9999
       API_EXTERNAL_URL: ${SUPABASE_URL}
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opuspopuli}
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
       GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:3000}
       GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS:-}
       GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP:-false}
@@ -311,7 +314,7 @@ services:
     networks:
       - opuspopuli-prod
     environment:
-      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opuspopuli}
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
       PGRST_DB_SCHEMAS: ${PGRST_DB_SCHEMAS:-public,storage,graphql_public}
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: ${JWT_SECRET}
@@ -343,7 +346,7 @@ services:
       SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       POSTGREST_URL: http://rest:3000
       PGRST_JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opuspopuli}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
       FILE_SIZE_LIMIT: 52428800
       STORAGE_BACKEND: file
       FILE_STORAGE_BACKEND_PATH: /var/lib/storage
@@ -364,7 +367,7 @@ services:
       PG_META_PORT: 8080
       PG_META_DB_HOST: db
       PG_META_DB_PORT: 5432
-      PG_META_DB_NAME: ${POSTGRES_DB:-opuspopuli}
+      PG_META_DB_NAME: ${POSTGRES_DB:-postgres}
       PG_META_DB_USER: supabase_admin
       PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
 
