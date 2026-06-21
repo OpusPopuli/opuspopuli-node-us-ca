@@ -182,14 +182,24 @@ services:
       - ./supabase/init/sql/02-_supabase.sql:/docker-entrypoint-initdb.d/migrations/97-_supabase.sql:ro
       - ./supabase/init/sql/03-realtime.sql:/docker-entrypoint-initdb.d/migrations/99-realtime.sql:ro
       - ./supabase/init/sql/04-webhooks.sql:/docker-entrypoint-initdb.d/init-scripts/99-webhooks.sql:ro
+      # App-required extensions (postgis / pgvector / pg_trgm) — must be
+      # installed while postgres is still SUPERUSER (before the bundled
+      # demote-postgres migration runs). Sequencing as `04-` keeps it
+      # alphabetically before `99-webhooks` so all extension installs are
+      # complete before any other init script can depend on them.
+      - ./supabase/init/sql/05-app-extensions.sql:/docker-entrypoint-initdb.d/init-scripts/04-app-extensions.sql:ro
       # Bind-mount our env-driven pgsodium getkey script over the image
       # default so the master key survives container recreations (#791).
       - ./supabase/init/pgsodium_getkey_env.sh:/usr/lib/postgresql/bin/pgsodium_getkey.sh:ro
     healthcheck:
       # supabase_admin is the bootstrap superuser (see POSTGRES_USER above).
       # `postgres` doesn't exist until migrate.sh creates it, so probing it
-      # would fail-noisy for the first ~second of startup.
-      test: ["CMD-SHELL", "pg_isready -U supabase_admin"]
+      # would fail-noisy for the first ~second of startup. Explicit `-d`
+      # so pg_isready connects to `postgres` instead of trying to connect
+      # to a database named after the user (`supabase_admin`, which doesn't
+      # exist) — without it, every probe logs FATAL: database
+      # "supabase_admin" does not exist into the db's own log.
+      test: ["CMD-SHELL", "pg_isready -U supabase_admin -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
