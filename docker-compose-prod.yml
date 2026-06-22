@@ -35,8 +35,17 @@ x-backend-env: &backend-env
   NODE_ENV: production
   PROJECT: opuspopuli
   VERSION: ${VERSION:-1.0.0}
-  # Supabase Cloud (user-facing data)
-  SUPABASE_URL: ${SUPABASE_URL}
+  # Supabase access. SUPABASE_URL is the IN-NETWORK address — backend
+  # services call kong via the docker network alias regardless of what
+  # public hostname the operator's Cloudflare Tunnel exposes. Without
+  # this hardcoded, `${SUPABASE_URL}` from the host env would become
+  # `http://localhost:8000` inside the container (where localhost is
+  # the container itself) and every Vault/auth/storage call would
+  # ECONNREFUSED. The operator's public URL flows separately via
+  # SUPABASE_PUBLIC_URL (used by gotrue + studio for browser-facing
+  # callback URLs).
+  SUPABASE_URL: http://kong:8000
+  SUPABASE_PUBLIC_URL: ${SUPABASE_URL:-http://localhost:8000}
   SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
   SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
   # Local PostgreSQL (AI scratch data). DB name aligned with upstream
@@ -58,8 +67,20 @@ x-backend-env: &backend-env
   JWT_SECRET: ${JWT_SECRET}
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
   GATEWAY_CLIENT_ID: api-gateway
-  GATEWAY_HMAC_SECRET: ${GATEWAY_HMAC_SECRET}
-  API_KEYS: ${API_KEYS}
+  # GATEWAY_HMAC_SECRET + API_KEYS are platform-internal HMAC keys used
+  # to sign requests between the API Gateway and microservices. Backend
+  # config validation rejects empty values. They're not yet Keychain-
+  # managed (tracked in #811 — vault-first secrets refactor); fallback
+  # defaults below keep the stack bootable for --local-only operators.
+  # NEVER deploy with these defaults on a Tunnel-exposed node: change
+  # to operator-specific high-entropy values via host env before `up`.
+  GATEWAY_HMAC_SECRET: ${GATEWAY_HMAC_SECRET:-local-only-hmac-secret-rotate-before-tunnel-exposure}
+  API_KEYS: ${API_KEYS:-'{"api-gateway":"local-only-hmac-secret-rotate-before-tunnel-exposure"}'}
+  # CORS — required in production by the backend's config validator.
+  # Default covers the local frontend dev port + the operator's public
+  # Supabase URL (whatever was passed to bootstrap). Operators serving
+  # a public frontend should override via host env or .env.
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3200,${SUPABASE_URL:-http://localhost:8000}}
   # OpenTelemetry distributed tracing
   OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
   # Secrets via Supabase Vault. The hydration step in apps/backend/src/common/
@@ -289,7 +310,9 @@ services:
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
-      API_EXTERNAL_URL: ${SUPABASE_URL}
+      # Public URL used in magic-link callback emails — must be what the
+      # user's browser can reach (not the in-network kong hostname).
+      API_EXTERNAL_URL: ${SUPABASE_URL:-http://localhost:8000}
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
       GOTRUE_SITE_URL: ${SITE_URL:-http://localhost:3000}
@@ -300,7 +323,7 @@ services:
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_JWT_EXP: ${JWT_EXPIRY:-3600}
       GOTRUE_JWT_SECRET: ${JWT_SECRET}
-      GOTRUE_JWT_ISSUER: ${SUPABASE_URL}/auth/v1
+      GOTRUE_JWT_ISSUER: ${SUPABASE_URL:-http://localhost:8000}/auth/v1
       GOTRUE_EXTERNAL_EMAIL_ENABLED: ${ENABLE_EMAIL_SIGNUP:-true}
       GOTRUE_MAILER_AUTOCONFIRM: ${ENABLE_EMAIL_AUTOCONFIRM:-true}
       GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-admin@example.com}
