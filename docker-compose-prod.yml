@@ -81,7 +81,12 @@ x-backend-env: &backend-env
   # NEVER deploy with these defaults on a Tunnel-exposed node: change
   # to operator-specific high-entropy values via host env before `up`.
   GATEWAY_HMAC_SECRET: ${GATEWAY_HMAC_SECRET:-local-only-hmac-secret-rotate-before-tunnel-exposure}
-  API_KEYS: ${API_KEYS:-'{"api-gateway":"local-only-hmac-secret-rotate-before-tunnel-exposure"}'}
+  # Outer single quotes are YAML syntax (stripped); the `${VAR:-default}`
+  # default falls through as bare JSON. Without the YAML wrapper, the
+  # literal single quotes around the inline default ended up in the env
+  # value, so the api-gateway's JSON.parse failed and it sent empty
+  # HMACs to every microservice ("Invalid X-HMAC-Auth" 401s everywhere).
+  API_KEYS: '${API_KEYS:-{"api-gateway":"local-only-hmac-secret-rotate-before-tunnel-exposure"}}'
   # CORS — required in production by the backend's config validator.
   # Default covers the local frontend dev port + the operator's public
   # Supabase URL (whatever was passed to bootstrap). Operators serving
