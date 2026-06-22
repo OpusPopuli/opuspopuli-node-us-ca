@@ -32,7 +32,13 @@
 # =============================================================================
 
 x-backend-env: &backend-env
-  NODE_ENV: production
+  # NODE_ENV: defaults to production for Tunnel-exposed deployments. In
+  # production mode the backend's CORS validator REQUIRES https:// origins
+  # — so `--local-only` Studio operators (no HTTPS server) must override
+  # with `NODE_ENV=development` in their shell env before `./bin/op-compose
+  # up`. The op-compose wrapper will eventually bake this in for
+  # bootstrap --local-only runs; tracked in a follow-up.
+  NODE_ENV: ${NODE_ENV:-production}
   PROJECT: opuspopuli
   VERSION: ${VERSION:-1.0.0}
   # Supabase access. SUPABASE_URL is the IN-NETWORK address — backend
@@ -93,12 +99,17 @@ x-backend-env: &backend-env
   # dead code and can be removed in a follow-up. See
   # docs/guides/secrets-management.md and issues #786 / #792.
   SECRETS_PROVIDER: supabase
-  # Email
-  RESEND_API_KEY: ${RESEND_API_KEY}
+  # Email — the backend's Resend client is constructed at module init
+  # (not lazily), so an empty RESEND_API_KEY crashes startup with
+  # "Missing API key. Pass it to the constructor new Resend('re_123')".
+  # The placeholder default lets the stack boot; emails will fail at
+  # send-time until the operator seeds a real key in Vault or via env.
+  # Same for SMTP_PASS — gotrue's SMTP client is eager too.
+  RESEND_API_KEY: ${RESEND_API_KEY:-re_LOCAL_DEV_PLACEHOLDER_emails_fail_until_seeded_in_vault}
   SMTP_HOST: ${SMTP_HOST:-smtp.resend.com}
   SMTP_PORT: ${SMTP_PORT:-465}
   SMTP_USER: ${SMTP_USER:-resend}
-  SMTP_PASS: ${SMTP_PASS}
+  SMTP_PASS: ${SMTP_PASS:-PLACEHOLDER_smtp_pass_emails_fail_until_seeded_in_vault}
   SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-noreply@opuspopuli.org}
   FRONTEND_URL: ${FRONTEND_URL:-https://opuspopuli.org}
 
