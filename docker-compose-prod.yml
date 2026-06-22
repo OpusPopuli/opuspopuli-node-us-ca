@@ -378,11 +378,24 @@ services:
     image: supabase/storage-api:v1.60.4
     container_name: opuspopuli-prod-storage
     restart: unless-stopped
+    # Use node (which is definitely in the image — it's a node app) for the
+    # healthcheck. `wget` in the alpine variant of storage-api:v1.60.4 fails
+    # with "Connection refused" on localhost even when the server is plainly
+    # listening on 0.0.0.0:5000 — verified externally via kong: `curl
+    # http://localhost:8000/storage/v1/bucket` returns 200 OK with the bucket
+    # list. The TCP probe below confirms the listener is accepting
+    # connections without depending on any specific HTTP endpoint or on
+    # wget's libc/SSL stack.
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/status"]
+      test:
+        - CMD
+        - node
+        - -e
+        - require('net').connect(5000, '127.0.0.1', () => process.exit(0)).on('error', () => process.exit(1));
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
     depends_on:
       db:
         condition: service_healthy
