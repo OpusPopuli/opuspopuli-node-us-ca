@@ -92,6 +92,17 @@ x-backend-env: &backend-env
   # Supabase URL (whatever was passed to bootstrap). Operators serving
   # a public frontend should override via host env or .env.
   ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3200,${SUPABASE_URL:-http://localhost:8000}}
+  # WebAuthn (passkey) configuration — REQUIRED in production by the users
+  # service's PasskeyService constructor. WEBAUTHN_RP_ID = the bare domain
+  # (no scheme/port) the passkey is bound to. WEBAUTHN_ORIGIN = the full
+  # https:// frontend URL the browser is on when registering. The default
+  # `localhost` works for --local-only operators because Safari + Chrome
+  # treat `http://localhost` as a "secure context" for WebAuthn.
+  # Operators serving a real domain MUST override BOTH to their values
+  # (e.g. WEBAUTHN_RP_ID=opuspopuli.org WEBAUTHN_ORIGIN=https://app.opuspopuli.org).
+  WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-localhost}
+  WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-http://localhost:3000}
+  WEBAUTHN_RP_NAME: ${WEBAUTHN_RP_NAME:-Opus Populi}
   # OpenTelemetry distributed tracing
   OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
   # Secrets via Supabase Vault. The hydration step in apps/backend/src/common/
