@@ -1,0 +1,135 @@
+# =============================================================================
+# Docker Compose — Colocated prompt-service overlay (optional)
+# =============================================================================
+#
+# Mounts the private `prompt-service` alongside the node stack so backend
+# services can reach it at `http://opuspopuli-prompts:3210` over the same
+# docker network. Only operators with `ghcr.io/opuspopuli/prompt-service`
+# pull access should use this file — most regions will eventually point at
+# a centrally-hosted prompt-service via PROMPT_SERVICE_URL=https://
+# prompts.opuspopuli.org (and just need the per-region HMAC distributed
+# by the prompts team).
+#
+# Activate by layering on top of the main compose:
+#   ./bin/op-compose -f docker-compose-prod.yml -f docker-compose-prompt-service.yml up -d
+#
+# The wrapper hydrates:
+#   PROMPTS_DB_PASSWORD          — from Keychain (prompts-db-password)
+#   PROMPT_SERVICE_API_KEYS      — `<region>:<key>` rendered by the wrapper
+#                                  from the prompt-service-api-key Keychain
+#                                  entry + the operator's region slug
+#   PROMPT_SERVICE_ADMIN_API_KEYS — from Keychain (prompt-service-admin-api-key)
+#   PROMPT_SERVICE_API_KEY       — bare `<key>` for backend services to send
+#                                  in HMAC headers
+#
+# Storage isolation: prompt-service uses its OWN postgres cluster
+# (`opuspopuli-prompts-db`, separate volume `prompts-db-data`) NOT the main
+# `db` service. The prompt IP boundary is enforced by physical separation
+# of the underlying volumes — losing one DB doesn't compromise the other.
+# =============================================================================
+
+services:
+  opuspopuli-prompts-db:
+    image: supabase/postgres:17.6.1.091
+    container_name: opuspopuli-prompts-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PROMPTS_DB_PASSWORD:?PROMPTS_DB_PASSWORD is required — run create-op-node bootstrap and reopen your shell}
+      POSTGRES_DB: prompt_service
+    volumes:
+      - prompts-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d prompt_service"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - opuspopuli-prod
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  opuspopuli-prompts:
+    image: ghcr.io/opuspopuli/prompt-service:${PROMPTS_TAG:-latest}
+    container_name: opuspopuli-prompts
+    restart: unless-stopped
+    ports:
+      # Exposed for direct admin / debug access on the host. Backend services
+      # within the docker network reach it via the service hostname instead.
+      - '${PROMPTS_HTTP_PORT:-3210}:3210/tcp'
+    depends_on:
+      opuspopuli-prompts-db:
+        condition: service_healthy
+    networks:
+      - opuspopuli-prod
+    environment:
+      DATABASE_URL: postgresql://postgres:${PROMPTS_DB_PASSWORD}@opuspopuli-prompts-db:5432/prompt_service?schema=public
+      # `API_KEYS` is a comma-separated list of `<region>:<key>` pairs.
+      # The op-compose wrapper renders it as `<this-region>:<keychain-value>`;
+      # in Phase 2 (remote prompts.opuspopuli.org) the prompts team will
+      # add additional regions to their hosted instance.
+      API_KEYS: ${PROMPT_SERVICE_API_KEYS:?PROMPT_SERVICE_API_KEYS is required — run create-op-node bootstrap}
+      ADMIN_API_KEYS: ${PROMPT_SERVICE_ADMIN_API_KEYS:?PROMPT_SERVICE_ADMIN_API_KEYS is required — run create-op-node bootstrap}
+      HMAC_TIMESTAMP_TOLERANCE_SECONDS: ${HMAC_TIMESTAMP_TOLERANCE_SECONDS:-300}
+      PROMPT_TTL_SECONDS: ${PROMPT_TTL_SECONDS:-3600}
+      PORT: 3210
+      NODE_ENV: ${NODE_ENV:-production}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3210/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1));"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # Backend service env overrides — point at the colocated prompt-service
+  # instead of the (empty) ${PROMPT_SERVICE_URL} from the main compose. These
+  # blocks MERGE with the base service definitions when both compose files
+  # are layered (Docker Compose merges service env top-level keys).
+  # ---------------------------------------------------------------------------
+  knowledge:
+    environment:
+      PROMPT_SERVICE_URL: http://opuspopuli-prompts:3210
+      PROMPT_SERVICE_API_KEY: ${PROMPT_SERVICE_API_KEY:?PROMPT_SERVICE_API_KEY is required — run create-op-node bootstrap}
+
+  region:
+    environment:
+      PROMPT_SERVICE_URL: http://opuspopuli-prompts:3210
+      PROMPT_SERVICE_API_KEY: ${PROMPT_SERVICE_API_KEY:?PROMPT_SERVICE_API_KEY is required — run create-op-node bootstrap}
+
+  region-worker:
+    environment:
+      PROMPT_SERVICE_URL: http://opuspopuli-prompts:3210
+      PROMPT_SERVICE_API_KEY: ${PROMPT_SERVICE_API_KEY:?PROMPT_SERVICE_API_KEY is required — run create-op-node bootstrap}
+
+  structural-analysis-worker:
+    environment:
+      PROMPT_SERVICE_URL: http://opuspopuli-prompts:3210
+      PROMPT_SERVICE_API_KEY: ${PROMPT_SERVICE_API_KEY:?PROMPT_SERVICE_API_KEY is required — run create-op-node bootstrap}
+
+  llm-rerank-worker:
+    environment:
+      PROMPT_SERVICE_URL: http://opuspopuli-prompts:3210
+      PROMPT_SERVICE_API_KEY: ${PROMPT_SERVICE_API_KEY:?PROMPT_SERVICE_API_KEY is required — run create-op-node bootstrap}
+
+  documents:
+    environment:
+      PROMPT_SERVICE_URL: http://opuspopuli-prompts:3210
+      PROMPT_SERVICE_API_KEY: ${PROMPT_SERVICE_API_KEY:?PROMPT_SERVICE_API_KEY is required — run create-op-node bootstrap}
+
+volumes:
+  prompts-db-data:
