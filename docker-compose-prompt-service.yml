@@ -80,7 +80,21 @@ services:
     networks:
       - opuspopuli-prod
     environment:
-      DATABASE_URL: postgresql://postgres:${PROMPTS_DB_PASSWORD}@opuspopuli-prompts-db:5432/prompt_service?schema=public
+      # Connect as supabase_admin (NOT postgres). After the bundled
+      # demote-postgres migration runs, the postgres role is NOSUPERUSER
+      # and isn't the owner of `prompt_service` (supabase_admin owns it,
+      # since supabase_admin is POSTGRES_USER above and the standard
+      # entrypoint creates the DB as the bootstrap superuser). Result:
+      # Prisma's `CREATE TABLE _prisma_migrations` fails with
+      # "permission denied for schema public".
+      #
+      # prompt-service is a single-app service that owns its DB end-to-end
+      # — no need for the role separation the main backend uses. Connecting
+      # as supabase_admin (which already has the same password — POSTGRES_
+      # PASSWORD == PROMPTS_DB_PASSWORD by the standard entrypoint's
+      # creation flow) lets Prisma manage schema + data with no extra
+      # GRANT acrobatics.
+      DATABASE_URL: postgresql://supabase_admin:${PROMPTS_DB_PASSWORD}@opuspopuli-prompts-db:5432/prompt_service?schema=public
       # `API_KEYS` is a comma-separated list of `<region>:<key>` pairs.
       # The op-compose wrapper renders it as `<this-region>:<keychain-value>`;
       # in Phase 2 (remote prompts.opuspopuli.org) the prompts team will
