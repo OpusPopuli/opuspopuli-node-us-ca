@@ -34,16 +34,27 @@ services:
     container_name: opuspopuli-prompts-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
+      # supabase_admin (NOT postgres) must be the BOOTSTRAP SUPERUSER. The
+      # image's migrate.sh opens with `psql -U supabase_admin` and assumes
+      # the role already exists. With POSTGRES_USER=postgres, migrate.sh
+      # fails with "password authentication failed for user supabase_admin"
+      # because the role doesn't exist (the standard postgres entrypoint
+      # only creates POSTGRES_USER). Same bug + fix as the main db in
+      # opuspopuli-node#8.
+      POSTGRES_USER: supabase_admin
       POSTGRES_PASSWORD: ${PROMPTS_DB_PASSWORD:?PROMPTS_DB_PASSWORD is required — run create-op-node bootstrap and reopen your shell}
       POSTGRES_DB: prompt_service
     volumes:
       - prompts-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d prompt_service"]
+      # Probe as supabase_admin (the bootstrap superuser). The `postgres`
+      # role gets created later by migrate.sh; probing it would fail-noisy
+      # for the first ~second of startup.
+      test: ["CMD-SHELL", "pg_isready -U supabase_admin -d prompt_service"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
     networks:
       - opuspopuli-prod
     deploy:
