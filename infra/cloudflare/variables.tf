@@ -75,8 +75,14 @@ variable "enable_r2" {
 # Tunnel Configuration
 # -----------------------------------------------------------------------------
 
+variable "tunnel_api_origin" {
+  description = "In-network origin hostname the tunnel routes to (the API Gateway service name on opuspopuli-network, reached by cloudflared over the docker network)"
+  type        = string
+  default     = "api"
+}
+
 variable "tunnel_api_port" {
-  description = "Local port the NestJS API Gateway listens on"
+  description = "Port the NestJS API Gateway listens on inside opuspopuli-network"
   type        = number
   default     = 8080
 }

@@ -7,8 +7,11 @@ server:
   http_listen_port: 9080
   grpc_listen_port: 0
 
+# Persist read positions across restarts so we don't re-ship every log line on
+# each container recreation. Backed by the `promtail-data` named volume mounted
+# at /var/lib/promtail (see docker-compose-prod.yml).
 positions:
-  filename: /tmp/positions.yaml
+  filename: /var/lib/promtail/positions.yaml
 
 clients:
   - url: http://loki:3100/loki/api/v1/push

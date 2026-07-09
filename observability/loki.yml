@@ -38,6 +38,11 @@ schema_config:
         prefix: index_
         period: 24h
 
+# NOTE: This ruler's alertmanager_url points at a host where nothing listens —
+# there is intentionally no Alertmanager container. Loki still evaluates any
+# ruler rules (producing queryable series), but alerts are NOT routed from here.
+# Grafana-managed alerting (bootstrap doc Phase 10) is the notification path.
+# The URL is left as a harmless placeholder; delivery is a no-op.
 ruler:
   alertmanager_url: http://localhost:9093
 

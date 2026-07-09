@@ -1,5 +1,14 @@
 # Prometheus Alerting Rules for OPUSPOPULI
 # @see https://github.com/OpusPopuli/opuspopuli/issues/308
+#
+# NOTE ON NOTIFICATION ROUTING:
+# These rules are EVALUATED by Prometheus (they produce ALERTS-state series you
+# can query and graph), but they are NOT routed to any notifier. There is
+# intentionally no `alerting:` section in prometheus.yml and no Alertmanager
+# container. The chosen platform direction is Grafana-managed alerting
+# (bootstrap doc Phase 10), which is the actual notification path.
+# These rules are kept because they remain useful as queryable series and as a
+# reference for the equivalent Grafana-managed alert definitions.
 
 groups:
   - name: opuspopuli-service-health

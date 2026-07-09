@@ -65,6 +65,20 @@ TARGET_DB="${PGDATABASE:-postgres}"
 TARGET_HOST="${PGHOST:-opuspopuli-db}"
 CURRENT_SHA="${GIT_SHA:-unknown}"
 
+# --full drops/recreates the DB, re-applies the JWT GUCs, and pg_restores.
+# All of that needs the bootstrap SUPERUSER: on the supabase/postgres image
+# the everyday `postgres` role is demoted to NOSUPERUSER, so it can neither
+# run the dump's `CREATE EXTENSION` (postgis/vector/pg_trgm) nor own the
+# recreated database. supabase_admin retains SUPERUSER.
+SUPERUSER="${BACKUP_SUPERUSER:-supabase_admin}"
+# JWT GUCs are database-level settings that a single-DB pg_dump does NOT
+# capture (`ALTER DATABASE ... SET` lives in pg_dumpall / globals). The
+# supabase init scripts (01-jwt.sql) only run on first boot, so after a
+# --full DROP+CREATE nothing restores them and postgrest auth breaks
+# silently. We re-apply them from env.
+JWT_SECRET="${JWT_SECRET:-}"
+JWT_EXP="${JWT_EXP:-3600}"
+
 # Pull the snapshot's git_sha out of the filename for drift detection.
 SNAPSHOT_BASENAME="$(basename "${SNAPSHOT}")"
 SNAPSHOT_SHA="$(echo "${SNAPSHOT_BASENAME}" | sed -nE 's/^opuspopuli-db-([^-]+)-[0-9TZ]+\.dump\.gz$/\1/p')"
@@ -125,22 +139,46 @@ case "${MODE}" in
     ;;
 
   full)
-    # Postgres can't drop a database you're connected to, so issue the
-    # DDL against `template1`. Terminate any other connections first so
-    # the DROP DATABASE doesn't block on stragglers.
-    if ! PGDATABASE="template1" psql -v ON_ERROR_STOP=1 <<SQL
+    # A single-DB pg_dump can't carry the database-level JWT GUCs, so we
+    # must have them to re-apply. Fail fast rather than restore a DB whose
+    # postgrest auth is silently broken.
+    if [[ -z "${JWT_SECRET}" ]]; then
+      log_json "\"status\":\"error\",\"mode\":\"full\",\"phase\":\"preflight\",\"reason\":\"jwt_secret_unset\""
+      echo "ERROR: JWT_SECRET is unset — --full would leave postgrest auth broken." >&2
+      echo "       Set JWT_SECRET (and optionally JWT_EXP) in the backup env." >&2
+      exit 1
+    fi
+
+    # Escape single quotes for safe embedding in the SQL string literals.
+    JWT_SECRET_SQL="${JWT_SECRET//\'/\'\'}"
+    JWT_EXP_SQL="${JWT_EXP//\'/\'\'}"
+
+    # All --full DDL runs as the SUPERUSER role (supabase_admin): the
+    # demoted `postgres` role can neither DROP/CREATE the DB it may own nor
+    # run the dump's CREATE EXTENSION. Postgres can't drop a database you're
+    # connected to, so issue the DDL against `template1`. Terminate any other
+    # connections first so DROP DATABASE doesn't block on stragglers.
+    #
+    # The re-applied GUCs replace what supabase/init/sql/01-jwt.sql sets on
+    # first boot (app.settings.jwt_secret / jwt_exp), which a single-DB
+    # pg_dump does not capture and which nothing else restores.
+    if ! PGUSER="${SUPERUSER}" PGDATABASE="template1" psql -v ON_ERROR_STOP=1 <<SQL
 SELECT pg_terminate_backend(pid)
   FROM pg_stat_activity
   WHERE datname = '${TARGET_DB}' AND pid <> pg_backend_pid();
 DROP DATABASE IF EXISTS "${TARGET_DB}";
 CREATE DATABASE "${TARGET_DB}";
+ALTER DATABASE "${TARGET_DB}" SET "app.settings.jwt_secret" TO '${JWT_SECRET_SQL}';
+ALTER DATABASE "${TARGET_DB}" SET "app.settings.jwt_exp" TO '${JWT_EXP_SQL}';
 SQL
     then
       log_json "\"status\":\"error\",\"mode\":\"full\",\"phase\":\"drop_create\",\"snapshot\":\"${SNAPSHOT_BASENAME}\""
       exit 1
     fi
 
-    if ! gunzip -c "${SNAPSHOT}" | pg_restore \
+    # Restore as SUPERUSER too — the dump's CREATE EXTENSION statements
+    # require SUPERUSER, which the everyday `postgres` role lacks.
+    if ! gunzip -c "${SNAPSHOT}" | PGUSER="${SUPERUSER}" pg_restore \
          --no-owner --no-acl --dbname="${TARGET_DB}" --exit-on-error; then
       log_json "\"status\":\"error\",\"mode\":\"full\",\"phase\":\"pg_restore\",\"snapshot\":\"${SNAPSHOT_BASENAME}\""
       exit 1
@@ -155,7 +193,7 @@ Restore complete. NOTE: snapshot git_sha (${SNAPSHOT_SHA}) is older
 than current (${CURRENT_SHA}). Apply Prisma migrations to bring the
 schema forward to current head:
 
-    docker compose -f docker-compose-uat.yml run --rm db-migrate
+    docker compose -f docker-compose-prod.yml run --rm db-migrate
 
 EOF
     fi

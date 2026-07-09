@@ -2,13 +2,19 @@
 # Production environment — REGION-SPECIFIC
 # =============================================================================
 #
-# Copy to prod.tfvars (gitignored) and edit per your region. Defaults in
-# variables.tf assume the OpusPopuli reference region (opuspopuli.org); change
-# anything region-specific below.
+# Copy to prod.tfvars, edit per your region, and COMMIT it. This file holds
+# region config (domain, subdomains, feature toggles) — NOT secrets — so it is
+# intentionally tracked in git and required by CI (cloudflare-infra.yml fails if
+# environments/prod.tfvars is missing). The Cloudflare API token is never stored
+# here: it flows in via TF_VAR_cloudflare_api_token from GitHub Secrets.
+#
+# Defaults in variables.tf assume the OpusPopuli reference region
+# (opuspopuli.org); change anything region-specific below.
 #
 # Usage:
 #   cp prod.tfvars.example prod.tfvars
 #   <edit prod.tfvars>
+#   git add prod.tfvars && commit
 # =============================================================================
 
 # Project name — used as a resource-name prefix (e.g. "<project>-tunnel-prod").

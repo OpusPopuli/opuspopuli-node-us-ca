@@ -3,7 +3,7 @@
 # Mac Studio production bootstrap — idempotent, safe to re-run.
 #
 # Automates Phases 3, 4, 5, 7, and 8-prep from
-# docs/guides/mac-studio-bootstrap.md.
+# docs/mac-studio-bootstrap.md.
 #
 # Manual steps it CAN'T automate (it'll prompt you when you hit them):
 #   - Phase 2: macOS Setup Assistant + System Settings (GUI)
@@ -115,13 +115,39 @@ chmod 400 "$KEY_FILE"
 echo
 echo "Paste the Cloudflare Tunnel token from 1Password"
 echo "(opuspopuli-prod-tunnel-token). Input is hidden."
-echo "Press Enter alone to keep the existing token in the LaunchAgent."
+echo "Press Enter alone to keep the existing token in the Keychain."
 read -rs -p "  token: " TUNNEL_TOKEN
 echo
 
-mkdir -p "$(dirname "$LAUNCH_AGENT")"
+# Keychain service/account for the tunnel token. The token is stored in the
+# login Keychain (never in the plist plaintext); the LaunchAgent reads it back
+# at boot via `security find-generic-password`.
+KEYCHAIN_SERVICE="org.opuspopuli.tunnel-token"
+KEYCHAIN_ACCOUNT="$(id -un)"
+
 if [[ -n "$TUNNEL_TOKEN" ]]; then
-  cat > "$LAUNCH_AGENT" <<PLIST
+  # -U updates the entry if it already exists (idempotent re-run).
+  # -T /usr/bin/security adds the `security` CLI to the item's ACL so the
+  # LaunchAgent can read it back NON-INTERACTIVELY at boot (without -T the
+  # read can raise a GUI keychain-authorization prompt, which fails on a
+  # headless/SSH-only Studio). NOTE: the login keychain must be UNLOCKED for
+  # the read to succeed — on an SSH-only reboot with no GUI login, unlock it
+  # first (`security unlock-keychain`) before `op-compose ... up`.
+  security add-generic-password \
+    -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" \
+    -w "$TUNNEL_TOKEN" -T /usr/bin/security -U
+  unset TUNNEL_TOKEN
+  log "stored tunnel token in Keychain ($KEYCHAIN_SERVICE)"
+else
+  log "keeping existing Keychain tunnel token"
+fi
+
+# Always (re)author the LaunchAgent. Both secrets are read at boot from their
+# stores ($KEY_FILE / Keychain) — no secret material is embedded in the plist.
+# $KEY_FILE is quoted inside the generated shell command so a $HOME containing
+# a space doesn't break `cat`.
+mkdir -p "$(dirname "$LAUNCH_AGENT")"
+cat > "$LAUNCH_AGENT" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -131,16 +157,14 @@ if [[ -n "$TUNNEL_TOKEN" ]]; then
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>launchctl setenv PGSODIUM_ROOT_KEY "\$(cat $KEY_FILE)"; launchctl setenv TUNNEL_TOKEN "$TUNNEL_TOKEN"</string>
+    <string>launchctl setenv PGSODIUM_ROOT_KEY "\$(cat '$KEY_FILE')"; launchctl setenv TUNNEL_TOKEN "\$(security find-generic-password -a '$KEYCHAIN_ACCOUNT' -s '$KEYCHAIN_SERVICE' -w)"</string>
   </array>
   <key>RunAtLoad</key><true/>
 </dict>
 </plist>
 PLIST
-  unset TUNNEL_TOKEN
-  chmod 600 "$LAUNCH_AGENT"
-  log "wrote $LAUNCH_AGENT"
-fi
+chmod 600 "$LAUNCH_AGENT"
+log "wrote $LAUNCH_AGENT"
 
 launchctl unload "$LAUNCH_AGENT" 2>/dev/null || true
 launchctl load "$LAUNCH_AGENT"
@@ -148,13 +172,13 @@ launchctl setenv PGSODIUM_ROOT_KEY "$(cat "$KEY_FILE")"
 log "LaunchAgent loaded; env injected into current launchd session"
 log "verify in a NEW shell after relogin: echo \${PGSODIUM_ROOT_KEY:0:8}"
 
-cat <<'NEXT'
+cat <<NEXT
 
 MANUAL — operator-secret seed SQL (used at Phase 8.3):
-  Write /Users/opuspopuli/.config/opuspopuli/seed-operator-vault.sql (mode 0400)
+  Write $CONFIG_DIR/seed-operator-vault.sql (mode 0400)
   containing vault_create_secret() calls for RESEND_API_KEY, FEC_API_KEY,
   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY.
-  See docs/guides/mac-studio-bootstrap.md Phase 4 step 3 for the SQL template.
+  See docs/mac-studio-bootstrap.md Phase 4 step 3 for the SQL template.
 
 NEXT
 prompt "seed-operator-vault.sql in place (or skip if seeding later)"
@@ -194,7 +218,7 @@ done
 curl -fsS http://localhost:11434/api/tags >/dev/null \
   || fail "Ollama not responding on :11434"
 
-for model in qwen3.5:9b nomic-embed-text; do
+for model in qwen3.5:35b nomic-embed-text; do
   if ollama list 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$model"; then
     log "$model already pulled"
   else
@@ -203,9 +227,9 @@ for model in qwen3.5:9b nomic-embed-text; do
   fi
 done
 
-log "warming qwen3.5:9b..."
+log "warming qwen3.5:35b..."
 curl -s -X POST http://localhost:11434/api/generate \
-     -d '{"model":"qwen3.5:9b","prompt":"hi","stream":false}' >/dev/null
+     -d '{"model":"qwen3.5:35b","prompt":"hi","stream":false}' >/dev/null
 log "Ollama ready"
 
 # verify host.docker.internal from inside a container
@@ -258,10 +282,10 @@ cat <<DONE
         docker compose -f docker-compose-prod.yml -f docker-compose-backup.yml \\
           up -d
 
-   5. Phase 8.3 — seed operator vault:
+   4. Phase 8.3 — seed operator vault:
         docker compose exec opuspopuli-db psql -U postgres -d postgres \\
           < $CONFIG_DIR/seed-operator-vault.sql
 
-   6. Phase 9 — Tunnel cutover + Pages re-point + off-LAN verify.
+   5. Phase 9 — Tunnel cutover + Pages re-point + off-LAN verify.
 
 DONE

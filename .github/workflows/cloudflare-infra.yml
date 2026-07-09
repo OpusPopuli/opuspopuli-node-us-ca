@@ -72,6 +72,12 @@ env:
 jobs:
   terraform:
     name: terraform
+    # Plan/apply is a per-region operation: it needs a committed
+    # environments/<ws>.tfvars AND the region's TFC + Cloudflare secrets.
+    # The template repo (OpusPopuli/opuspopuli-node) has neither, so the job
+    # can't run here — skip it. Region instances created from this template
+    # (with their own committed tfvars + secrets) run it normally.
+    if: github.repository != 'OpusPopuli/opuspopuli-node'
     runs-on: ubuntu-latest
     defaults:
       run:

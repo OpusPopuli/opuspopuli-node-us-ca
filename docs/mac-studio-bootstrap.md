@@ -35,7 +35,7 @@ The pgsodium key file path and LaunchAgent label use the stable `opuspopuli` pla
 | Supabase | Self-hosted on the Studio (no Supabase Cloud) |
 | Email | Resend (DKIM on `<your-domain>`) |
 | Backups | Nightly `pg_dump -Fc` → Cloudflare R2, 30-day retention |
-| LLM | Local Ollama, `qwen3.5:9b` to start |
+| LLM | Local Ollama, `qwen3.5:35b` to start |
 | FileVault | Off (Secure Enclave still encrypts the SSD; trade is unattended boot) |
 | pgsodium key | 1Password `<your-region>-prod-pgsodium-root-key`, mirrored locally at `$HOME/.config/opuspopuli/pgsodium_root_key` mode 0400 |
 | Out-of-band admin | Tailscale |
@@ -46,7 +46,7 @@ The pgsodium key file path and LaunchAgent label use the stable `opuspopuli` pla
 
 Do these from your laptop today.
 
-1. **Apply Cloudflare prod Terraform** — creates Tunnel, DNS (`api.`, `grafana.`), R2 bucket.
+1. **Apply Cloudflare prod Terraform** — creates the Tunnel, the `api.` DNS record (and `app.` only if `frontend_worker_subdomain` is set), and R2 buckets. Grafana gets no DNS record here — it's added later in Phase 10 by extending `tunnel.tf`.
    ```bash
    cd infra/cloudflare
    terraform workspace select prod || terraform workspace new prod
@@ -148,7 +148,7 @@ Do these from your laptop today.
    ```bash
    brew install ollama
    brew services start ollama
-   ollama pull qwen3.5:9b &
+   ollama pull qwen3.5:35b &
    ollama pull nomic-embed-text &
    ```
 
@@ -250,9 +250,14 @@ Rehearse recovery before there's anything worth recovering.
    ```bash
    docker compose -f docker-compose-prod.yml down -v
    docker compose -f docker-compose-prod.yml up -d opuspopuli-db
+   # Pull the latest snapshot into the backup container's /backups volume.
    rclone copy r2:<your-region>-prod-db-backups/<latest>.dump.gz /tmp/
+   # restore-db.sh requires (--quick | --full) AND a snapshot path — with no
+   # snapshot argument it prints usage and exits 64. Pass the file you copied;
+   # snapshot filenames are opuspopuli-db-<git_sha>-<timestamp>.dump.gz.
    docker compose -f docker-compose-prod.yml -f docker-compose-backup.yml \
-                  run --rm opuspopuli-backup /scripts/restore-db.sh --full
+                  run --rm opuspopuli-backup \
+                  /scripts/restore-db.sh --full /backups/<latest>.dump.gz
    ```
    Time it. Target: **< 60 min**. Record RTO in `docs/site-notes/<your-hostname>.md`.
 
@@ -267,12 +272,12 @@ Rehearse recovery before there's anything worth recovering.
 Ollama downloads from Phase 3.7 should be done by now.
 
 ```bash
-ollama list                                # qwen3.5:9b + nomic-embed-text present
+ollama list                                # qwen3.5:35b + nomic-embed-text present
 curl http://localhost:11434/api/tags | jq '.models[].name'
 docker run --rm alpine sh -c 'apk add curl && curl http://host.docker.internal:11434/api/tags'
 # warm the model so first user request isn't a 90s cold start:
 curl -X POST http://localhost:11434/api/generate \
-     -d '{"model":"qwen3.5:9b","prompt":"hi","stream":false}'
+     -d '{"model":"qwen3.5:35b","prompt":"hi","stream":false}'
 ```
 
 ---
@@ -312,14 +317,29 @@ The prod compose already references `ghcr.io/opuspopuli/<service>:${TAG:-latest}
    ```
    Expect a positive integer.
 
-5. **Wait for healthy:**
+5. **Wait for healthy.** The prod compose publishes only a handful of host
+   ports; the individual backend microservices (users/documents/knowledge/
+   region) are reachable only on the internal compose network, so health-check
+   them via the API gateway and check the published ports directly:
    ```bash
-   for port in 3000 3001 3002 3003 3004 3005 3210; do
-     printf "port %s: " $port
-     curl -fsS "http://localhost:$port/health" && echo
-   done
+   # API gateway (published on host port 8080) — the gateway's own health:
+   curl -fsS http://localhost:8080/health && echo          # {"status":"ok"}
+
+   # prompt-service (published on 127.0.0.1:3210):
+   curl -fsS http://localhost:3210/health && echo
+
+   # Grafana (published on 127.0.0.1:3101):
+   curl -fsS http://localhost:3101/api/health && echo
+
+   # Supabase Kong gateway (published on 8000):
+   curl -fsS http://localhost:8000/ >/dev/null && echo "kong: ok"
    ```
-   All `{"status":"ok"}`.
+   For per-service health, exec into a container and hit it on the internal
+   network, e.g.:
+   ```bash
+   docker compose exec opuspopuli-api \
+     wget -qO- http://knowledge:8080/health && echo
+   ```
 
 6. **Run ad-hoc backup** to verify R2 upload from the real stack:
    ```bash
@@ -335,7 +355,7 @@ The prod compose already references `ghcr.io/opuspopuli/<service>:${TAG:-latest}
 1. **Connect cloudflared.** Already defined in `docker-compose-prod.yml`; reads `TUNNEL_TOKEN` from launchd env (Phase 4.2).
    ```bash
    docker compose -f docker-compose-prod.yml up -d cloudflared
-   docker logs <your-region>-prod-cloudflared --tail 50
+   docker logs opuspopuli-cloudflared --tail 50
    # expect "Registered tunnel connection" from 2+ edge POPs
    ```
 
@@ -364,7 +384,7 @@ The prod compose already references `ghcr.io/opuspopuli/<service>:${TAG:-latest}
 
 ## Phase 10 — Observability + alerts (≈ 45 min)
 
-1. **Grafana behind Cloudflare Access.** Extend `infra/cloudflare/tunnel.tf` with an ingress rule for `grafana.<your-domain>` → `http://localhost:3101`. Apply. Add Cloudflare Access policy requiring login as your email.
+1. **Grafana behind Cloudflare Access.** Extend `infra/cloudflare/tunnel.tf` with an ingress rule for `grafana.<your-domain>` → `http://grafana:3000` (cloudflared runs as a container on `opuspopuli-network`, so it reaches Grafana by its in-network service name + port, not the host-published `localhost:3101`). Apply. Add Cloudflare Access policy requiring login as your email.
    ```bash
    curl -I https://grafana.<your-domain>    # redirect to Access login
    ```
@@ -398,7 +418,7 @@ Run the entire bootstrap from Phase 2 onward against a second Mac (your dev MacB
 | Container OOMs (region, knowledge) | Docker memory cap too low | Settings → Resources → bump from 40 → 48 GB |
 | `network prompt-service_default not found` | prompt-service stack not running | Phase 8.1 |
 | Stale frontend after Pages deploy | Service worker cache | DevTools → Application → Service Workers → Unregister + Reload |
-| Ollama timeouts | `OLLAMA_NUM_PARALLEL` vs `BIO_GENERATOR_CONCURRENCY` mismatch | `docs/guides/ollama-setup.md` |
+| Ollama timeouts | `OLLAMA_NUM_PARALLEL` vs `BIO_GENERATOR_CONCURRENCY` mismatch | [central repo: docs/guides/ollama-setup.md](https://github.com/OpusPopuli/opuspopuli/blob/main/docs/guides/ollama-setup.md) |
 | `apollo-require-preflight` 403 | NestJS CSRF on the path | Use in-browser fetch — same-origin cookies bypass |
 | Tunnel reports unhealthy | Token rotated or DNS not pointing at tunnel | Re-apply Terraform; reload LaunchAgent |
 | `vault.secrets` all error after restore | pgsodium key drift | Restore 1Password key to `$HOME/.config/opuspopuli/pgsodium_root_key`; relogin |

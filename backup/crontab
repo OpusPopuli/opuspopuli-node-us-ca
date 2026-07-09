@@ -3,3 +3,7 @@
 #
 # m h dom mon dow command
 0 3 * * * /scripts/backup-db.sh
+# Prompt-service DB (opuspopuli-prompts-db). Staggered 10 min after the main
+# backup so they don't contend for the shared flock. No-ops (logs `skipped`)
+# on nodes not running the prompt-service overlay.
+10 3 * * * /scripts/backup-prompts-db.sh

@@ -66,9 +66,9 @@ Enable R2 in the Cloudflare dashboard one time (R2 → Get started → confirm b
 
 Open a PR with your edited `prod.tfvars`. The `cloudflare-infra` workflow runs `terraform plan` and posts the diff as a PR comment. Expect:
 - 1 Cloudflare Tunnel
-- DNS records for `api.<your-domain>` + `app.<your-domain>`
+- 1 DNS record for `api.<your-domain>` (the `app.<your-domain>` record is created only if you set `frontend_worker_subdomain` in your tfvars — it's not in the example, so the first apply won't create it)
 - 3 R2 buckets (documents, transcripts, scraped)
-- 1 Cloudflare Pages project
+- **No** Cloudflare Pages/Workers resource — the frontend deploys separately via `wrangler` (`pnpm cf:deploy`), so Terraform manages no Worker/Pages resource (see `pages.tf`)
 
 Review, merge to `main`. The workflow runs `terraform apply`.
 
