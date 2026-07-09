@@ -72,12 +72,6 @@ env:
 jobs:
   terraform:
     name: terraform
-    # Plan/apply is a per-region operation: it needs a committed
-    # environments/<ws>.tfvars AND the region's TFC + Cloudflare secrets.
-    # The template repo (OpusPopuli/opuspopuli-node) has neither, so the job
-    # can't run here — skip it. Region instances created from this template
-    # (with their own committed tfvars + secrets) run it normally.
-    if: github.repository != 'OpusPopuli/opuspopuli-node'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -115,26 +109,39 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
 
-      - name: Verify prod.tfvars exists
+      # Terraform CI is a per-region operation: it needs a committed
+      # environments/<ws>.tfvars AND the region's Terraform Cloud token. A
+      # freshly-templated repo (and the template itself) has neither, so
+      # rather than hard-fail we detect whether it's configured and skip the
+      # plan/apply steps cleanly (green) when it isn't. A configured region
+      # repo — tfvars committed + TF_API_TOKEN secret set — runs normally.
+      - name: Detect terraform configuration
+        id: cfg
         run: |
-          if [ ! -f "environments/${{ steps.ws.outputs.name }}.tfvars" ]; then
-            echo "::error::environments/${{ steps.ws.outputs.name }}.tfvars not found. Copy from prod.tfvars.example and commit it (or pass values via TF_VAR_* env)."
-            exit 1
+          if [ -f "environments/${{ steps.ws.outputs.name }}.tfvars" ] && [ -n "${{ secrets.TF_API_TOKEN }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Terraform CI not configured for this repo (needs environments/${{ steps.ws.outputs.name }}.tfvars committed + the TF_API_TOKEN / Cloudflare Actions secrets). Skipping plan/apply. See README.md."
           fi
 
       - name: terraform init
+        if: steps.cfg.outputs.ready == 'true'
         run: terraform init
 
       - name: terraform workspace
+        if: steps.cfg.outputs.ready == 'true'
         run: |
           terraform workspace select ${{ steps.ws.outputs.name }} \
             || terraform workspace new ${{ steps.ws.outputs.name }}
 
       - name: terraform validate
+        if: steps.cfg.outputs.ready == 'true'
         run: terraform validate -no-color
 
       - name: terraform plan
         id: plan
+        if: steps.cfg.outputs.ready == 'true'
         run: |
           set +e
           terraform plan -no-color \
@@ -189,5 +196,5 @@ jobs:
             await github.rest.issues.createComment({ owner, repo, issue_number, body });
 
       - name: terraform apply
-        if: steps.act.outputs.mode == 'apply'
+        if: steps.act.outputs.mode == 'apply' && steps.cfg.outputs.ready == 'true'
         run: terraform apply -no-color -input=false tfplan
