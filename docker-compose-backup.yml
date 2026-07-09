@@ -56,9 +56,39 @@ services:
     environment:
       # DB connection — defaults match opuspopuli-db across all envs.
       PGHOST: ${BACKUP_PGHOST:-opuspopuli-db}
+      # PGUSER: the everyday role for --quick restores and pg_dump.
       PGUSER: ${BACKUP_PGUSER:-postgres}
-      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # No well-known fallback: prod hard-fails on an unset password (it
+      # mirrors docker-compose-prod.yml's policy). A default of `postgres`
+      # here would silently paper over a misconfigured secret and connect
+      # with the well-known password.
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — see .env.backup.example}
       PGDATABASE: ${BACKUP_PGDATABASE:-postgres}
+      # Superuser role used by restore-db.sh --full for the drop/create +
+      # CREATE EXTENSION DDL that a demoted `postgres` (NOSUPERUSER on the
+      # supabase/postgres image) can't run. Same password as PGPASSWORD.
+      BACKUP_SUPERUSER: ${BACKUP_SUPERUSER:-supabase_admin}
+      # JWT GUCs re-applied by restore-db.sh --full after DROP+CREATE DATABASE
+      # (a single-DB pg_dump does NOT capture `ALTER DATABASE ... SET`, and
+      # the supabase init scripts only run on first boot). Without these,
+      # postgrest auth silently breaks post-restore.
+      # Optional passthrough (NOT `:?`): only restore-db.sh --full needs it,
+      # and that path preflight-checks it itself. Making it required here
+      # would couple the nightly backup service's startup to a var it never
+      # uses — a missing JWT_SECRET would silently stop backups. On a real
+      # node the op-compose wrapper always exports it.
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_EXP: ${JWT_EXP:-3600}
+      # Prompt-service DB backup (backup-prompts-db.sh, crontab 03:10).
+      # Optional — the script skips cleanly when opuspopuli-prompts-db is
+      # unreachable (overlay not active). When the prompt-service overlay
+      # IS running, PROMPTS_DB_PASSWORD must be set so the prompts snapshot
+      # can authenticate as supabase_admin. Defaults below match
+      # docker-compose-prompt-service.yml.
+      PROMPTS_DB_PASSWORD: ${PROMPTS_DB_PASSWORD:-}
+      PROMPTS_PGHOST: ${PROMPTS_PGHOST:-opuspopuli-prompts-db}
+      PROMPTS_PGUSER: ${PROMPTS_PGUSER:-supabase_admin}
+      PROMPTS_PGDATABASE: ${PROMPTS_PGDATABASE:-prompt_service}
       # Schema version tag baked into snapshot filenames so restore can
       # detect drift between snapshot-time and restore-time code.
       GIT_SHA: ${GIT_SHA:-unknown}

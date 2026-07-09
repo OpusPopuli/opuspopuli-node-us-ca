@@ -9,10 +9,10 @@
 # Usage:
 #   ./scripts/start-prod.sh                        # defaults to .env.production
 #   ./scripts/start-prod.sh --env-file .env.staging
-#   ./scripts/start-prod.sh --skip-pull             # skip Ollama model pull check
-#   ./scripts/start-prod.sh --build                 # rebuild from source (rare —
-#                                                  # default pulls signed images
-#                                                  # from ghcr.io/opuspopuli/*)
+#   ./scripts/start-prod.sh --skip-pull            # skip Ollama model pull check
+#
+# All services run from signed images pulled from ghcr.io/opuspopuli/* —
+# there are no local build contexts.
 #
 # =============================================================================
 
@@ -23,8 +23,6 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 ENV_FILE=".env.production"
 SKIP_PULL=false
-BUILD_FLAG=""
-VERIFY_IMAGES=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -36,17 +34,9 @@ while [[ $# -gt 0 ]]; do
       SKIP_PULL=true
       shift
       ;;
-    --build)
-      BUILD_FLAG="--build"
-      shift
-      ;;
-    --verify)
-      VERIFY_IMAGES=true
-      shift
-      ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [--env-file <file>] [--skip-pull] [--build] [--verify]"
+      echo "Usage: $0 [--env-file <file>] [--skip-pull]"
       exit 1
       ;;
   esac
@@ -60,7 +50,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # 1. Check Ollama is installed
 # ---------------------------------------------------------------------------
-echo "[1/6] Checking Ollama installation..."
+echo "[1/5] Checking Ollama installation..."
 if ! command -v ollama &> /dev/null; then
   echo "ERROR: Ollama is not installed."
   echo ""
@@ -73,7 +63,7 @@ echo "      Ollama installed: $(ollama --version 2>/dev/null || echo 'unknown ve
 # ---------------------------------------------------------------------------
 # 2. Check Ollama is running
 # ---------------------------------------------------------------------------
-echo "[2/6] Checking Ollama is running..."
+echo "[2/5] Checking Ollama is running..."
 if curl -sf http://localhost:11434/ > /dev/null 2>&1; then
   echo "      Ollama is running on port 11434"
 else
@@ -112,7 +102,7 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Check required models
 # ---------------------------------------------------------------------------
-echo "[3/6] Checking required models..."
+echo "[3/5] Checking required models..."
 
 # Read LLM_MODEL from env file, default to qwen3.5:35b
 LLM_MODEL="qwen3.5:35b"
@@ -125,7 +115,7 @@ fi
 
 INSTALLED_MODELS=$(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' || true)
 
-if echo "$INSTALLED_MODELS" | grep -q "^${LLM_MODEL}"; then
+if echo "$INSTALLED_MODELS" | grep -qxF "$LLM_MODEL"; then
   echo "      Model '$LLM_MODEL' is available"
 elif [[ "$SKIP_PULL" == "true" ]]; then
   echo "      WARNING: Model '$LLM_MODEL' not found (skipping pull due to --skip-pull)"
@@ -138,7 +128,7 @@ fi
 # ---------------------------------------------------------------------------
 # 4. Health check
 # ---------------------------------------------------------------------------
-echo "[4/6] Running Ollama health check..."
+echo "[4/5] Running Ollama health check..."
 if curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; then
   MODEL_COUNT=$(curl -sf http://localhost:11434/api/tags | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('models',[])))" 2>/dev/null || echo "?")
   echo "      Ollama API healthy ($MODEL_COUNT model(s) loaded)"
@@ -148,26 +138,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Verify container image signatures (optional)
+# 5. Start Docker Compose
 # ---------------------------------------------------------------------------
-if [[ "$VERIFY_IMAGES" == "true" ]]; then
-  echo "[5/6] Verifying container image signatures..."
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [[ -x "${SCRIPT_DIR}/verify-images.sh" ]]; then
-    "${SCRIPT_DIR}/verify-images.sh"
-  else
-    echo "ERROR: verify-images.sh not found or not executable."
-    echo "       Expected at: ${SCRIPT_DIR}/verify-images.sh"
-    exit 1
-  fi
-else
-  echo "[5/6] Skipping image verification (use --verify to enable)"
-fi
-
-# ---------------------------------------------------------------------------
-# 6. Start Docker Compose
-# ---------------------------------------------------------------------------
-echo "[6/6] Starting production stack..."
+echo "[5/5] Starting production stack..."
 echo ""
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -178,7 +151,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 docker compose -f docker-compose-prod.yml --env-file "$ENV_FILE" pull
-docker compose -f docker-compose-prod.yml --env-file "$ENV_FILE" up -d --remove-orphans $BUILD_FLAG
+docker compose -f docker-compose-prod.yml --env-file "$ENV_FILE" up -d --remove-orphans
 
 echo ""
 echo "============================================"
@@ -194,9 +167,18 @@ sleep 5
 UNHEALTHY=$(docker compose -f docker-compose-prod.yml ps --format json 2>/dev/null \
   | python3 -c "
 import sys, json
-lines = sys.stdin.read().strip().split('\n')
-for line in lines:
-    c = json.loads(line)
+raw = sys.stdin.read().strip()
+if not raw:
+    sys.exit(0)
+# 'docker compose ps --format json' emits either a single JSON array or one
+# JSON object per line (NDJSON), depending on the compose version. Handle both.
+try:
+    containers = json.loads(raw)
+    if not isinstance(containers, list):
+        containers = [containers]
+except json.JSONDecodeError:
+    containers = [json.loads(line) for line in raw.splitlines() if line.strip()]
+for c in containers:
     if c.get('Health','') == 'unhealthy':
         print(f\"  - {c['Service']}: unhealthy\")
 " 2>/dev/null || true)
@@ -213,7 +195,7 @@ fi
 # Verify containers can reach Ollama
 echo ""
 echo "Verifying LLM connectivity from containers..."
-if docker exec opuspopuli-prod-knowledge \
+if docker exec opuspopuli-knowledge \
   node -e "require('http').get('http://host.docker.internal:11434/', r => { process.exit(r.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))" 2>/dev/null; then
   echo "  Containers can reach Ollama via host.docker.internal:11434"
 else

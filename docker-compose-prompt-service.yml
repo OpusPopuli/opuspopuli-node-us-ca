@@ -24,13 +24,13 @@
 #
 # Storage isolation: prompt-service uses its OWN postgres cluster
 # (`opuspopuli-prompts-db`, separate volume `prompts-db-data`) NOT the main
-# `db` service. The prompt IP boundary is enforced by physical separation
+# `opuspopuli-db` service. The prompt IP boundary is enforced by physical separation
 # of the underlying volumes — losing one DB doesn't compromise the other.
 # =============================================================================
 
 services:
   opuspopuli-prompts-db:
-    image: supabase/postgres:17.6.1.091
+    image: supabase/postgres:17.6.1.138
     container_name: opuspopuli-prompts-db
     restart: unless-stopped
     environment:
@@ -56,7 +56,7 @@ services:
       retries: 5
       start_period: 15s
     networks:
-      - opuspopuli-prod
+      - opuspopuli-network
     deploy:
       resources:
         limits:
@@ -71,14 +71,16 @@ services:
     container_name: opuspopuli-prompts
     restart: unless-stopped
     ports:
-      # Exposed for direct admin / debug access on the host. Backend services
+      # Bound to loopback: direct admin / debug access from the host only.
+      # The prompt-service admin API must NOT be reachable from the LAN on a
+      # Studio (its ADMIN_API_KEYS gate prompt mutation). Backend services
       # within the docker network reach it via the service hostname instead.
-      - '${PROMPTS_HTTP_PORT:-3210}:3210/tcp'
+      - '127.0.0.1:${PROMPTS_HTTP_PORT:-3210}:3210/tcp'
     depends_on:
       opuspopuli-prompts-db:
         condition: service_healthy
     networks:
-      - opuspopuli-prod
+      - opuspopuli-network
     environment:
       # Connect as supabase_admin (NOT postgres). After the bundled
       # demote-postgres migration runs, the postgres role is NOSUPERUSER

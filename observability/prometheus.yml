@@ -10,6 +10,17 @@ global:
 rule_files:
   - /etc/prometheus/alerts/*.yml
 
+# NOTE: Alert rules loaded from rule_files are evaluated by Prometheus but are
+# NOT routed to any notifier — there is intentionally no `alerting:` section and
+# no Alertmanager container. Grafana-managed alerting (bootstrap doc Phase 10) is
+# the notification path. The rules remain useful as queryable series and for
+# Grafana panels/alerts. See prometheus-alerts.yml.
+
+# All microservices run inside the `opuspopuli-network` docker network and expose
+# metrics on port 8080 at /metrics. Prometheus runs on the same network and
+# resolves service DNS names directly (e.g. `users:8080`). Job and instance
+# labels are aligned to the service DNS name so existing dashboards/alerts that
+# key on `job`/`service` continue to match.
 scrape_configs:
   # Prometheus self-monitoring
   - job_name: 'prometheus'
@@ -17,51 +28,58 @@ scrape_configs:
       - targets: ['localhost:9090']
 
   # API Gateway metrics
-  - job_name: 'api-gateway'
+  - job_name: 'api'
     static_configs:
-      - targets: ['host.docker.internal:4000']
+      - targets: ['api:8080']
     metrics_path: /metrics
     scrape_interval: 10s
 
   # Users Service metrics
-  - job_name: 'users-service'
+  - job_name: 'users'
     static_configs:
-      - targets: ['host.docker.internal:4001']
+      - targets: ['users:8080']
     metrics_path: /metrics
     scrape_interval: 10s
 
   # Documents Service metrics
-  - job_name: 'documents-service'
+  - job_name: 'documents'
     static_configs:
-      - targets: ['host.docker.internal:4002']
+      - targets: ['documents:8080']
     metrics_path: /metrics
     scrape_interval: 10s
 
   # Knowledge Service metrics
-  - job_name: 'knowledge-service'
+  - job_name: 'knowledge'
     static_configs:
-      - targets: ['host.docker.internal:4003']
+      - targets: ['knowledge:8080']
     metrics_path: /metrics
     scrape_interval: 10s
 
   # Region Service metrics
-  - job_name: 'region-service'
+  - job_name: 'region'
     static_configs:
-      - targets: ['host.docker.internal:4004']
+      - targets: ['region:8080']
     metrics_path: /metrics
     scrape_interval: 10s
 
   # Region Worker metrics
   - job_name: 'region-worker'
     static_configs:
-      - targets: ['host.docker.internal:4005']
+      - targets: ['region-worker:8080']
     metrics_path: /metrics
     scrape_interval: 10s
 
   # Structural Analysis Worker metrics
   - job_name: 'structural-analysis-worker'
     static_configs:
-      - targets: ['host.docker.internal:4006']
+      - targets: ['structural-analysis-worker:8080']
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # LLM Rerank Worker metrics
+  - job_name: 'llm-rerank-worker'
+    static_configs:
+      - targets: ['llm-rerank-worker:8080']
     metrics_path: /metrics
     scrape_interval: 10s
 

@@ -27,14 +27,16 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "api" {
   tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.api[0].id
 
   config {
-    # Route API traffic to the local NestJS gateway
+    # Route API traffic to the API Gateway container over opuspopuli-network.
+    # cloudflared runs as a container on the same network, so it reaches the
+    # gateway by its in-network service name — not localhost, which would be
+    # the cloudflared container itself.
     ingress_rule {
       hostname = local.api_hostname
-      service  = "http://localhost:${var.tunnel_api_port}"
+      service  = "http://${var.tunnel_api_origin}:${var.tunnel_api_port}"
 
       origin_request {
         connect_timeout = "30s"
-        no_tls_verify   = true
       }
     }
 
