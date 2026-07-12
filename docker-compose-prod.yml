@@ -19,9 +19,12 @@
 #   - Observability: Prometheus + Loki + Grafana
 #   - Ollama: Runs NATIVELY on macOS (not Docker) for Metal GPU access
 #
-# Configure via .env.production (see .env.production.example). Runtime secrets
-# (RESEND_API_KEY, R2_*, FEC_API_KEY) come from the local Supabase Vault via
-# the hydration path in apps/backend/src/common/preflight.ts.
+# Configure via the single-source `.env` in this directory — docker compose
+# auto-loads it for `${VAR:-default}` interpolation (see .env.example).
+# LLM_MODEL and NODE_ENV are the key operator knobs; create-op-node generates
+# this `.env` during bootstrap. Runtime secrets (RESEND_API_KEY, R2_*,
+# FEC_API_KEY) come from the local Supabase Vault via the hydration path in
+# apps/backend/src/common/preflight.ts.
 #
 # Usage:
 #   docker compose -f docker-compose-prod.yml pull            # fetch new images
@@ -33,11 +36,13 @@
 
 x-backend-env: &backend-env
   # NODE_ENV: defaults to production for Tunnel-exposed deployments. In
-  # production mode the backend's CORS validator REQUIRES https:// origins
-  # — so `--local-only` Studio operators (no HTTPS server) must override
-  # with `NODE_ENV=development` in their shell env before `./bin/op-compose
-  # up`. The op-compose wrapper will eventually bake this in for
-  # bootstrap --local-only runs; tracked in a follow-up.
+  # production mode the backend's CORS validator REQUIRES https:// origins,
+  # so a `--local-only` node (which serves http://localhost origins) must run
+  # with NODE_ENV=development or region/knowledge crash-loop on the CORS
+  # preflight. Set it in the single-source `.env` (compose auto-loads it; see
+  # .env.example) — create-op-node writes NODE_ENV=development for
+  # `bootstrap --local-only`, and manual operators set it once in `.env`. This
+  # no longer depends on remembering to export it in the op-compose shell (#36).
   NODE_ENV: ${NODE_ENV:-production}
   PROJECT: opuspopuli
   VERSION: ${VERSION:-1.0.0}
@@ -68,7 +73,11 @@ x-backend-env: &backend-env
   RELATIONAL_DB_PASSWORD: ${POSTGRES_PASSWORD}
   RELATIONAL_DB_DATABASE: ${POSTGRES_DB:-postgres}
   # Redis
+  # BullMQ queue (noeviction — jobs must never be evicted).
   REDIS_URL: redis://redis:6379
+  # App cache (allkeys-lru, evictable) — dedicated instance so cache writes
+  # can't fill the queue instance and stall jobs (#725). In-network literal.
+  REDIS_CACHE_URL: redis://redis-cache:6379
   # Auth & Security
   JWT_SECRET: ${JWT_SECRET}
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET}
@@ -135,6 +144,22 @@ x-healthcheck: &healthcheck
   timeout: 5s
   retries: 5
   start_period: 30s
+
+# Single source for the LLM env shared by every service that calls Ollama
+# (knowledge, region, and the region / structural-analysis / llm-rerank
+# workers). Merged into each via `<<: [*backend-env, *llm-env]` so LLM_MODEL is
+# defined exactly ONCE — a subset recreate can no longer bake divergent models
+# across services (#36).
+#
+# Ollama runs NATIVELY on macOS for Metal GPU access; containers reach it over
+# host.docker.internal. LLM_MODEL here is only a FALLBACK — the real value is
+# the single-source `.env` (auto-loaded by compose; see .env.example) that
+# create-op-node writes. The default is the smallest always-pullable tier so a
+# bare `docker compose` run works on any hardware; create-op-node #97 pulls and
+# verifies the actually-configured model.
+x-llm-env: &llm-env
+  LLM_URL: http://host.docker.internal:11434
+  LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
 
 services:
   # ---------------------------------------------------------------------------
@@ -474,10 +499,13 @@ services:
   # ---------------------------------------------------------------------------
   # Redis
   # ---------------------------------------------------------------------------
+  # BullMQ queue Redis. noeviction (Redis default, set explicitly): job data
+  # must never be silently evicted under memory pressure. No hard maxmemory —
+  # the queue is bounded by worker cadence. App cache is on redis-cache (#725).
   redis:
     image: redis:7-alpine
     container_name: opuspopuli-redis
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
     volumes:
       - redis-data:/data
     healthcheck:
@@ -492,7 +520,32 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: 256M
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  # App-cache Redis (#725). allkeys-lru: evicts cold entries under memory
+  # pressure instead of failing cache writes (opposite policy from the queue
+  # instance). Ephemeral — no appendonly/volume; cache data is disposable and
+  # re-derived from source. Backend targets it via REDIS_CACHE_URL.
+  redis-cache:
+    image: redis:7-alpine
+    container_name: opuspopuli-redis-cache
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - opuspopuli-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
         reservations:
           cpus: '0.1'
           memory: 64M
@@ -575,13 +628,19 @@ services:
     image: ghcr.io/opuspopuli/knowledge:${TAG:-latest}
     container_name: opuspopuli-knowledge
     environment:
-      <<: *backend-env
+      <<: [*backend-env, *llm-env]
       APPLICATION: knowledge
       DESCRIPTION: Knowledge microservice
       PORT: 8080
-      # Ollama runs natively on macOS for Metal GPU acceleration
-      LLM_URL: http://host.docker.internal:11434
-      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
+      # Embeddings — knowledge is the ONLY service that generates them (RAG).
+      # Default provider is xenova (in-process); operators who set
+      # EMBEDDINGS_PROVIDER=ollama in .env also get the model + host-reachable
+      # Ollama URL bound here. The in-network default overrides the backend's
+      # localhost default (which points at the container itself). Env NAMES
+      # match packages/config-provider/src/configs/embeddings.config.ts (#36).
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-xenova}
+      EMBEDDINGS_OLLAMA_URL: ${EMBEDDINGS_OLLAMA_URL:-http://host.docker.internal:11434}
+      EMBEDDINGS_OLLAMA_MODEL: ${EMBEDDINGS_OLLAMA_MODEL:-nomic-embed-text}
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -602,12 +661,10 @@ services:
     image: ghcr.io/opuspopuli/region:${TAG:-latest}
     container_name: opuspopuli-region
     environment:
-      <<: *backend-env
+      <<: [*backend-env, *llm-env]
       APPLICATION: region
       DESCRIPTION: Region microservice
       PORT: 8080
-      LLM_URL: http://host.docker.internal:11434
-      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
       REGION_SYNC_ENABLED: "true"
     depends_on:
       db-migrate:
@@ -629,13 +686,11 @@ services:
     image: ghcr.io/opuspopuli/region-worker:${TAG:-latest}
     container_name: opuspopuli-region-worker
     environment:
-      <<: *backend-env
+      <<: [*backend-env, *llm-env]
       APPLICATION: region-worker
       DESCRIPTION: Region worker (async job processor)
       PORT: 8080
       REGION_WORKER_PORT: 8080
-      LLM_URL: http://host.docker.internal:11434
-      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
       REGION_SYNC_ENABLED: "true"
       REGION_SYNC_CRON_ENABLED: "true"
       REGION_SYNC_CRON_VIA_QUEUE: "true"
@@ -661,13 +716,11 @@ services:
     image: ghcr.io/opuspopuli/structural-analysis-worker:${TAG:-latest}
     container_name: opuspopuli-structural-analysis-worker
     environment:
-      <<: *backend-env
+      <<: [*backend-env, *llm-env]
       APPLICATION: structural-analysis-worker
       DESCRIPTION: Structural analysis worker (async manifest analysis)
       PORT: 8080
       STRUCTURAL_ANALYSIS_WORKER_PORT: 8080
-      LLM_URL: http://host.docker.internal:11434
-      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -690,13 +743,11 @@ services:
     image: ghcr.io/opuspopuli/llm-rerank-worker:${TAG:-latest}
     container_name: opuspopuli-llm-rerank-worker
     environment:
-      <<: *backend-env
+      <<: [*backend-env, *llm-env]
       APPLICATION: llm-rerank-worker
       DESCRIPTION: LLM re-rank worker (personalized feed nightly batch, opuspopuli#745)
       PORT: 8080
       LLM_RERANK_WORKER_PORT: 8080
-      LLM_URL: http://host.docker.internal:11434
-      LLM_MODEL: ${LLM_MODEL:-qwen3.5:35b}
       PROMPT_SERVICE_URL: ${PROMPT_SERVICE_URL}
       PROMPT_SERVICE_API_KEY: ${PROMPT_SERVICE_API_KEY}
       LLM_RERANK_CRON_ENABLED: ${LLM_RERANK_CRON_ENABLED:-true}
