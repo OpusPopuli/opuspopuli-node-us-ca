@@ -692,8 +692,13 @@ services:
       PORT: 8080
       REGION_WORKER_PORT: 8080
       REGION_SYNC_ENABLED: "true"
-      REGION_SYNC_CRON_ENABLED: "true"
+      REGION_SYNC_CRON_ENABLED: "${REGION_SYNC_CRON_ENABLED:-true}"
       REGION_SYNC_CRON_VIA_QUEUE: "true"
+      # Bill enrichment (Phase 6 "summarize") throughput. Concurrency requires
+      # OLLAMA_NUM_PARALLEL >= BILL_ENRICHMENT_CONCURRENCY on the native Ollama
+      # service, or parallel calls just queue at Ollama. Default 1 = serial (safe).
+      BILL_ENRICHMENT_CONCURRENCY: "${BILL_ENRICHMENT_CONCURRENCY:-1}"
+      BILL_ENRICHMENT_REQUEST_TIMEOUT_MS: "${BILL_ENRICHMENT_REQUEST_TIMEOUT_MS:-120000}"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
