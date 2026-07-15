@@ -699,6 +699,11 @@ services:
       # service, or parallel calls just queue at Ollama. Default 1 = serial (safe).
       BILL_ENRICHMENT_CONCURRENCY: "${BILL_ENRICHMENT_CONCURRENCY:-1}"
       BILL_ENRICHMENT_REQUEST_TIMEOUT_MS: "${BILL_ENRICHMENT_REQUEST_TIMEOUT_MS:-120000}"
+      # Bill votes extraction (Phase 3 "votes_only"). Concurrency parallelizes the
+      # per-bill LLM calls (needs OLLAMA_NUM_PARALLEL >= this) (#892). MAX_TOKENS
+      # prevents JSON truncation on large roll-calls (default 8000, up from 4000) (#894).
+      BILL_VOTES_CONCURRENCY: "${BILL_VOTES_CONCURRENCY:-1}"
+      BILL_VOTES_MAX_TOKENS: "${BILL_VOTES_MAX_TOKENS:-8000}"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
