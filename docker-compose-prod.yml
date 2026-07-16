@@ -666,6 +666,13 @@ services:
       DESCRIPTION: Region microservice
       PORT: 8080
       REGION_SYNC_ENABLED: "true"
+      # The service also runs a cron scheduler (region.scheduler.ts). Wire the
+      # same flags as region-worker so both honor one config: VIA_QUEUE=true
+      # makes the service scheduler defer to the worker's, and CRON_ENABLED
+      # gates it. Without these the service fired the 2 AM sweep even with
+      # crons "disabled" on the worker.
+      REGION_SYNC_CRON_ENABLED: "${REGION_SYNC_CRON_ENABLED:-true}"
+      REGION_SYNC_CRON_VIA_QUEUE: "true"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
