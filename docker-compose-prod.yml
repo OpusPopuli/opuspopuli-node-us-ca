@@ -384,6 +384,15 @@ services:
       GOTRUE_SMTP_USER: ${SMTP_USER:-fake_mail_user}
       GOTRUE_SMTP_PASS: ${SMTP_PASS:-fake_mail_password}
       GOTRUE_SMTP_SENDER_NAME: ${SMTP_SENDER_NAME:-Opus Populi}
+      # Mailer link paths MUST include the /auth/v1 prefix: Kong only routes
+      # GoTrue's verify endpoint at /auth/v1/verify (kong.yml, strip_path:true).
+      # Without these, GoTrue defaults to /verify and generated magic-link /
+      # confirmation / recovery URLs 404 at the gateway. Structural (mirrors
+      # Kong routing) — hard-coded, not env-driven. See opuspopuli-node#41.
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
 
   supabase-rest:
     image: postgrest/postgrest:v14.12
