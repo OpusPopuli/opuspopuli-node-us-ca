@@ -49,6 +49,10 @@ services:
       dockerfile: Dockerfile
       args:
         SUPERCRONIC_VERSION: ${SUPERCRONIC_VERSION:-v0.2.31}
+        # Baked into the image as ENV GIT_SHA so backup-db.sh tags snapshot
+        # filenames with the deployed code version (#44). Set GIT_SHA in the
+        # build env (op-compose can export `git rev-parse --short HEAD`).
+        GIT_SHA: ${GIT_SHA:-unknown}
     container_name: opuspopuli-backup
     depends_on:
       opuspopuli-db:
@@ -89,9 +93,9 @@ services:
       PROMPTS_PGHOST: ${PROMPTS_PGHOST:-opuspopuli-prompts-db}
       PROMPTS_PGUSER: ${PROMPTS_PGUSER:-supabase_admin}
       PROMPTS_PGDATABASE: ${PROMPTS_PGDATABASE:-prompt_service}
-      # Schema version tag baked into snapshot filenames so restore can
-      # detect drift between snapshot-time and restore-time code.
-      GIT_SHA: ${GIT_SHA:-unknown}
+      # GIT_SHA is NOT set here at runtime — it's baked into the image at build
+      # (build.args above → ENV GIT_SHA). A runtime `${GIT_SHA:-unknown}` would
+      # clobber the baked value with `unknown` whenever the host env is unset.
       # Where the container writes snapshots — bind-mounted from host.
       BACKUPS_DIR: /backups
       # How many days of snapshots to retain. Older files are deleted

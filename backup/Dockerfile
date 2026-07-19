@@ -48,11 +48,24 @@ RUN set -eux; \
 # Bake the scripts into the image so it works standalone. The compose
 # bind-mount over /scripts lets us iterate on script content without
 # rebuilds during local development.
+# Git SHA of the node repo at image-build time, baked so backup-db.sh can tag
+# snapshot filenames with the deployed code version for restore-time drift
+# detection (#44). Supplied by the compose `build.args` (GIT_SHA from the build
+# env); defaults to `unknown` when the builder didn't pass one.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
 COPY scripts /scripts
 COPY crontab.tmpl /crontab.tmpl
 COPY entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /scripts/*.sh /entrypoint.sh
+
+# Disable the healthcheck inherited from supabase/postgres (`pg_isready -h
+# localhost`): this container is a cron/pg_dump CLIENT, not a Postgres server,
+# so that probe fails forever and marks the container `unhealthy` despite
+# working. supercronic is PID 1 — the container being up IS its liveness (#44).
+HEALTHCHECK NONE
 
 # flock, gzip, find, date are already in the base image.
 
