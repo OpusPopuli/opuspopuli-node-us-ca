@@ -1,0 +1,11 @@
+# supercronic crontab TEMPLATE — rendered at container start by entrypoint.sh
+# from the BACKUP_SCHEDULE / BACKUP_PROMPTS_SCHEDULE env vars. Change the
+# schedule via those env vars (see .env.backup.example), NOT by editing here.
+# Fired in the container's TZ (TZ env var; default America/Los_Angeles).
+#
+# m h dom mon dow command
+@BACKUP_SCHEDULE@ /scripts/backup-db.sh
+# Prompt-service DB (opuspopuli-prompts-db). Staggered after the main backup so
+# they don't contend for the shared flock. No-ops (logs `skipped`) on nodes not
+# running the prompt-service overlay.
+@BACKUP_PROMPTS_SCHEDULE@ /scripts/backup-prompts-db.sh

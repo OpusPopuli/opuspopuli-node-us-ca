@@ -16,9 +16,21 @@ if [[ $# -gt 0 ]]; then
   exec "$@"
 fi
 
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"scheduler_start\",\"crontab\":\"$(cat /crontab | tr '\n' ';' | sed 's/"/\\"/g')\"}"
+# Render the live crontab from the schedule env vars. Defaults preserve the
+# historical 03:00 / 03:10 daily behavior, so a node that sets neither var
+# behaves exactly as before. Rendered to a writable path because the container
+# runs as the non-root `postgres` user and can't overwrite the baked /crontab.tmpl.
+: "${BACKUP_SCHEDULE:=0 3 * * *}"
+: "${BACKUP_PROMPTS_SCHEDULE:=10 3 * * *}"
+CRONTAB_RENDERED="${CRONTAB_RENDERED:-/tmp/opuspopuli-crontab}"
+# `|` delimiter avoids clashing with `/scripts/...`; cron values contain no `|`.
+sed -e "s|@BACKUP_SCHEDULE@|${BACKUP_SCHEDULE}|" \
+    -e "s|@BACKUP_PROMPTS_SCHEDULE@|${BACKUP_PROMPTS_SCHEDULE}|" \
+    /crontab.tmpl > "${CRONTAB_RENDERED}"
+
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"scheduler_start\",\"backup_schedule\":\"${BACKUP_SCHEDULE}\",\"prompts_schedule\":\"${BACKUP_PROMPTS_SCHEDULE}\",\"crontab\":\"$(tr '\n' ';' < "${CRONTAB_RENDERED}" | sed 's/"/\\"/g')\"}"
 
 # -passthrough-logs streams scheduled job stdout/stderr through
 # supercronic to container stdout, so backup-db.sh's JSON log lines
 # surface in `docker logs opuspopuli-backup`.
-exec /usr/local/bin/supercronic -passthrough-logs /crontab
+exec /usr/local/bin/supercronic -passthrough-logs "${CRONTAB_RENDERED}"

@@ -49,7 +49,7 @@ RUN set -eux; \
 # bind-mount over /scripts lets us iterate on script content without
 # rebuilds during local development.
 COPY scripts /scripts
-COPY crontab /crontab
+COPY crontab.tmpl /crontab.tmpl
 COPY entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /scripts/*.sh /entrypoint.sh

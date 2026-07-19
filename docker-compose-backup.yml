@@ -97,9 +97,14 @@ services:
       # How many days of snapshots to retain. Older files are deleted
       # by the daily run after a successful pg_dump.
       RETENTION_DAYS: ${RETENTION_DAYS:-7}
-      # Cron timezone — 03:00 in this TZ is when the scheduled backup
-      # fires. supercronic respects the TZ env var.
+      # Cron timezone — the scheduled hour in BACKUP_SCHEDULE is interpreted
+      # in this TZ. supercronic respects the TZ env var.
       TZ: ${TZ:-America/Los_Angeles}
+      # Backup schedules (5-field cron). entrypoint.sh renders /crontab from
+      # these; defaults preserve the historical 03:00 (main) / 03:10 (prompts)
+      # daily runs. create-op-node writes BACKUP_SCHEDULE from --backup-schedule.
+      BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 3 * * *}
+      BACKUP_PROMPTS_SCHEDULE: ${BACKUP_PROMPTS_SCHEDULE:-10 3 * * *}
       # If true, ad-hoc runs block waiting for the scheduled run to
       # finish. If false, they fail fast when the lock is held.
       BACKUP_LOCK_WAIT: ${BACKUP_LOCK_WAIT:-true}
