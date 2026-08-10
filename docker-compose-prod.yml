@@ -930,10 +930,21 @@ services:
       # default, and Phase 10 (tunnel exposure) requires a real password first.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Absolute base for share links, alert URLs and OAuth redirects. Without
+      # it Grafana advertises http://localhost:3000, which is wrong for anyone
+      # not sitting at the node.
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3101}
     volumes:
       - grafana-data:/var/lib/grafana
+      # Datasources as code (Loki/Prometheus/Tempo). Read-only: Grafana should
+      # never rewrite what the repo declares.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "127.0.0.1:3101:3000"  # Local access only
+      # Loopback by default — an observability dashboard reachable from other
+      # machines is a deliberate choice, not a default. `create-op-node
+      # bootstrap --grafana-tailnet` writes this node's Tailscale IP into .env
+      # so the dashboard is reachable across the tailnet and nowhere else.
+      - "${GRAFANA_BIND_ADDR:-127.0.0.1}:3101:3000"
     depends_on:
       - prometheus
       - loki
