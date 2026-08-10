@@ -1,0 +1,100 @@
+{
+  "uid": "op-sync-pipeline",
+  "title": "Sync Pipeline",
+  "description": "What the region worker is doing right now. Built on Loki rather than Prometheus because the sync exposes no metrics — progress, failures and linker results exist only as log lines. Until that changes, this is the view that answers 'is the sync alive, and how far along is it?'",
+  "tags": ["opuspopuli", "sync"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Ingest rate (records/sec)",
+      "description": "Derived from the handler's 'Flushed batch' lines. This is THE liveness signal for a bulk sync: table row counts stay flat for hours while re-processing existing rows as updates, but this keeps moving. Flat here means genuinely stalled.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate({container=\"opuspopuli-region-worker\"} |= \"Flushed batch\" [5m])) * 10000",
+          "legendFormat": "records/sec"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "fillOpacity": 15, "lineWidth": 2, "showPoints": "never" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "logs",
+      "title": "Sync progress",
+      "description": "Batch counters and phase transitions. The '(N total)' figure is cumulative records read from the source file, not rows written — they differ whenever the upsert key collapses duplicates.",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{container=\"opuspopuli-region-worker\"} |~ \"Flushed batch|Phase [0-9]/|Pipeline started|Starting data sync\" | decolorize"
+        }
+      ],
+      "options": { "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true }
+    },
+    {
+      "id": 3,
+      "type": "logs",
+      "title": "Linker results",
+      "description": "Post-sync attribution. 'linked' is rows successfully resolved; 'noCoverPage' and 'noCommittee' split the remainder by cause — the first means the join source never arrived, the second that it did but referenced an unknown committee.",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{container=\"opuspopuli-region-worker\"} |~ \"linker|linked=\" | decolorize"
+        }
+      ],
+      "options": { "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Error rate by service",
+      "description": "Errors and warnings across the stack. A sync that fails silently still shows up here — several failure paths log a warning and continue rather than failing the job.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 18 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service) (rate({compose_project=~\".+\"} |~ \"(?i)\\\\berror\\\\b|\\\\bfatal\\\\b\" [5m]))",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "fillOpacity": 10, "lineWidth": 1, "showPoints": "never" }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "Recent errors",
+      "description": "Raw error lines, newest first. Start here when a sync reports success but the data looks wrong.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 26 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{compose_project=~\".+\"} |~ \"(?i)\\\\berror\\\\b|\\\\bfatal\\\\b\" | decolorize"
+        }
+      ],
+      "options": { "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true }
+    }
+  ]
+}

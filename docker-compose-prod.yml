@@ -936,9 +936,13 @@ services:
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3101}
     volumes:
       - grafana-data:/var/lib/grafana
-      # Datasources as code (Loki/Prometheus/Tempo). Read-only: Grafana should
-      # never rewrite what the repo declares.
+      # Datasources and dashboard providers as code (Loki/Prometheus/Tempo).
+      # Read-only: Grafana should never rewrite what the repo declares.
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      # Dashboard JSON, loaded by the provider above. Read-only for the same
+      # reason — edits in the browser are for exploring; to keep one, export it
+      # and commit the file.
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       # Loopback by default — an observability dashboard reachable from other
       # machines is a deliberate choice, not a default. `create-op-node

@@ -1,0 +1,22 @@
+# Dashboard provisioning.
+#
+# Dashboards are files in the repo, not objects an operator built by hand in
+# the UI — every node gets the same starting view, and a `grafana-data` volume
+# reset costs nothing.
+#
+# `allowUiUpdates: false` makes that explicit: edits in the browser are for
+# exploring, and Grafana restores the file version on restart. To keep a change,
+# use the dashboard's Export → "Save to file" and commit the JSON.
+apiVersion: 1
+
+providers:
+  - name: 'opuspopuli'
+    orgId: 1
+    folder: 'Opus Populi'
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
