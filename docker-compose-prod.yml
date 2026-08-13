@@ -101,6 +101,24 @@ x-backend-env: &backend-env
   # Supabase URL (whatever was passed to bootstrap). Operators serving
   # a public frontend should override via host env or .env.
   ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:3200,${SUPABASE_URL:-http://localhost:8000}}
+  # Auth cookie scope. Left unset, cookies are HOST-ONLY: a cookie set by
+  # api-us-ca.opuspopuli.org cannot be read by app-us-ca.opuspopuli.org, and the
+  # frontend cannot authenticate no matter how correct CORS is. Setting these to
+  # `.opuspopuli.org` shares them across subdomains.
+  #
+  # Both are needed. The session cookies read cookie.domain (COOKIE_DOMAIN); the
+  # CSRF double-submit cookie is issued by its own middleware and reads
+  # csrf.cookieDomain (CSRF_COOKIE_DOMAIN). Setting only one produces a login
+  # that half-works — session established, every mutation rejected on CSRF.
+  #
+  # Defaults stay empty so a single-host or --local-only node keeps host-only
+  # cookies, which is the safer scope when there are no sibling subdomains.
+  COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+  CSRF_COOKIE_DOMAIN: ${CSRF_COOKIE_DOMAIN:-}
+  # 'strict' by default in the backend. Subdomains of one registrable domain are
+  # SAME-SITE, so strict still works for app -> api; exposed here for operators
+  # whose frontend sits on a different registrable domain and needs 'none'.
+  COOKIE_SAME_SITE: ${COOKIE_SAME_SITE:-}
   # WebAuthn (passkey) configuration — REQUIRED in production by the users
   # service's PasskeyService constructor. WEBAUTHN_RP_ID = the bare domain
   # (no scheme/port) the passkey is bound to. WEBAUTHN_ORIGIN = the full
