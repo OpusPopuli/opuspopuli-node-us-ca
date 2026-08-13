@@ -1,0 +1,132 @@
+name: validate
+
+# Structural validation of the deploy configuration.
+#
+# Why: this repo holds the production compose files and deploy scripts for the
+# us-ca node, and until 2026-08-13 nothing ran on a pull request. The only
+# workflow, cloudflare-infra.yml, is path-filtered to infra/cloudflare/**, so a
+# malformed docker-compose-prod.yml or a broken bin/ script could merge with
+# nothing objecting — and would next be discovered by an operator, on the
+# Studio, during a deploy.
+#
+# Deliberately structural only. It does not start services, reach the network,
+# or need a secret: it answers "would docker even parse this", which is the
+# class of error worth catching before it reaches a production host.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate compose + scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: YAML parses
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r f; do
+            if python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$f" 2>/dev/null; then
+              echo "  ok   $f"
+            else
+              echo "::error file=$f::not valid YAML"
+              fail=1
+            fi
+          done < <(find . -path ./.git -prune -o \( -name '*.yml' -o -name '*.yaml' \) -print | sort)
+          exit $fail
+
+      - name: Compose files are structurally valid
+        run: |
+          set -euo pipefail
+
+          # docker compose refuses to render when an interpolated variable has
+          # no value. Real values live in the macOS Keychain and are injected by
+          # bin/op-compose at deploy time; the placeholders below exist only so
+          # the renderer will run. Nothing starts, nothing authenticates.
+          #
+          # Derived from the compose files rather than hardcoded, so adding a
+          # required variable cannot silently break this check — which is what a
+          # fixed list would do, and would do quietly. Both required forms are
+          # matched: bare `${VAR}` and `${VAR:?message}`. `${VAR:-default}` is
+          # skipped by construction, since it needs nothing from us.
+          REQUIRED=$( {
+            grep -ohE '\$\{[A-Z_][A-Z0-9_]*\}' docker-compose*.yml | tr -d '${}'
+            grep -ohE '\$\{[A-Z_][A-Z0-9_]*:\?' docker-compose*.yml | sed 's/\${//; s/:?//'
+          } | sort -u )
+
+          echo "Placeholding $(printf '%s\n' "$REQUIRED" | wc -l | tr -d ' ') required variable(s)"
+          # read loop rather than `for v in $REQUIRED`: that relies on unquoted
+          # word-splitting, which bash does and zsh does not. Anyone running
+          # these steps by hand on macOS would otherwise get a confusing failure.
+          # Path-shaped on purpose. BACKUPS_DIR_HOST is interpolated into a
+          # volume mount, where a bare word is read as a NAMED VOLUME reference
+          # and fails as undefined. A leading slash satisfies both that and
+          # every plain-string use — compose does not validate the contents.
+          while IFS= read -r v; do
+            [ -n "$v" ] && export "$v=/tmp/ci-placeholder"
+          done <<< "$REQUIRED"
+
+          # Validated as they are actually used, not one file at a time. The
+          # backup and prompt-service files are OVERLAYS layered onto the prod
+          # file — backup references opuspopuli-db, prompt-service extends
+          # llm-rerank-worker, and neither service exists in its own file.
+          # Rendering them standalone fails by design, so a naive per-file loop
+          # would have failed this job on every run forever.
+          fail=0
+          check() {
+            local label="$1"; shift
+            if out=$(docker compose "$@" config --quiet 2>&1); then
+              echo "  ok   $label"
+            else
+              echo "::error::docker compose could not render: $label"
+              printf '%s\n' "$out"
+              fail=1
+            fi
+          }
+
+          check "docker-compose-prod.yml" \
+            -f docker-compose-prod.yml
+          [ -e docker-compose-backup.yml ] && check "prod + backup overlay" \
+            -f docker-compose-prod.yml -f docker-compose-backup.yml
+          [ -e docker-compose-prompt-service.yml ] && check "prod + prompt-service overlay" \
+            -f docker-compose-prod.yml -f docker-compose-prompt-service.yml
+
+          exit $fail
+
+      - name: Shell scripts parse
+        run: |
+          set -euo pipefail
+          fail=0
+          # Selected by `.sh` or a shell shebang — NOT by "has no extension".
+          # That looser rule swept in backup/Dockerfile, which bash -n happened
+          # to accept; a Dockerfile carrying RUN lines would have failed this
+          # job for a file that was never a shell script.
+          #
+          # bin/op-compose is legitimately absent: create-op-node bootstrap
+          # generates it per node and it is untracked here. Only what the repo
+          # actually ships is checked.
+          while IFS= read -r f; do
+            case "$f" in
+              *.sh) ;;
+              *) head -1 "$f" | grep -qE '^#!.*\b(ba|z|k)?sh\b' || continue ;;
+            esac
+            if bash -n "$f" 2>/dev/null; then
+              echo "  ok   $f"
+            else
+              echo "::error file=$f::bash syntax error"
+              bash -n "$f" || true
+              fail=1
+            fi
+          done < <(find . -path ./.git -prune -o -type f -print 2>/dev/null | sort)
+          exit $fail
