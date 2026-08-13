@@ -30,3 +30,15 @@ secrets/
 # Local backup staging (R2 is the source of truth)
 backup/staging/
 db-backups/
+
+# Generated per node by `create-op-node bootstrap --region us-ca`, and it says
+# so in its own header: "Do not edit by hand; re-run bootstrap to regenerate."
+# Bootstrap owns this file, so committing it would only invite drift from what
+# bootstrap actually produces.
+#
+# Ignored rather than left untracked: an untracked file that can never be
+# removed leaves `git status` permanently dirty, which trains you to skim past
+# it — and this is the repo where you least want a real change overlooked.
+#
+# It holds no secrets; it reads them from the macOS Keychain at run time.
+bin/op-compose
