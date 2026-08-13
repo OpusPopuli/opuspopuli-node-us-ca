@@ -30,20 +30,52 @@
 # placed after that line would ever run.
 #
 # Usage:
-#   ./bin/op-deploy                          # docker-compose-prod.yml
-#   ./bin/op-deploy docker-compose-uat.yml   # explicit compose file
+#   ./bin/op-deploy                          # prod + every overlay this node uses
+#   ./bin/op-deploy docker-compose-uat.yml   # explicit, single file
+#   ./bin/op-deploy docker-compose-prod.yml docker-compose-prompt-service.yml
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-COMPOSE_FILE="${1:-docker-compose-prod.yml}"
-OC="./bin/op-compose -f ${COMPOSE_FILE}"
-
-if [ ! -f "$COMPOSE_FILE" ]; then
-  echo "op-deploy: compose file '$COMPOSE_FILE' not found" >&2
-  exit 1
+# Overlays are NOT optional, and the first version of this script assumed they
+# were. It defaulted to docker-compose-prod.yml alone, which on a colocated node
+# is actively wrong: docker-compose-prompt-service.yml does not merely ADD
+# prompt-service and its database, it also sets PROMPT_SERVICE_URL and
+# PROMPT_SERVICE_API_KEY on SIX backend services.
+#
+# Deploying the prod file by itself therefore recreated those six WITHOUT that
+# wiring — pointing them at nothing. It fails quietly rather than loudly: a
+# backend that cannot reach the prompt service falls back to stub prompts, so
+# extraction degrades while everything still reports healthy. Observed on
+# 2026-08-13.
+#
+# Default is now the prod base plus every overlay present, in that order —
+# docker compose gives precedence to later files, so the base must come first.
+# Pass files explicitly to deploy a subset.
+if [ "$#" -gt 0 ]; then
+  COMPOSE_FILES="$*"
+else
+  COMPOSE_FILES="docker-compose-prod.yml"
+  for f in docker-compose-prompt-service.yml; do
+    [ -e "$f" ] && COMPOSE_FILES="$COMPOSE_FILES $f"
+  done
 fi
+
+# docker-compose-backup.yml is deliberately NOT in the default set. It is an
+# on-demand job, not part of the running stack, and layering it here would
+# recreate backup containers on every deploy. Pass it explicitly if wanted.
+
+OC="./bin/op-compose"
+for f in $COMPOSE_FILES; do
+  if [ ! -f "$f" ]; then
+    echo "op-deploy: compose file '$f' not found" >&2
+    exit 1
+  fi
+  OC="$OC -f $f"
+done
+
+echo "==> Compose files: $COMPOSE_FILES"
 
 # Docker's VM disk, not the host's. `df` on the Mac reports 400+ GB free while
 # the VM disk is at 100% — that discrepancy is what hid this failure until
@@ -84,7 +116,11 @@ TAG="${TAG:-latest}"
 
 echo ""
 echo "==> Tagging current images as :previous (rollback point)"
-grep -oE 'ghcr\.io/opuspopuli/[a-z0-9-]+' "$COMPOSE_FILE" | sort -u | while read -r repo; do
+# Scraped across ALL files being deployed, not just the base. prompt-service
+# lives only in its overlay, so a base-only scrape left it with no :previous tag
+# and therefore no rollback point — the one service most recently broken by a
+# deploy would have been the one you could not roll back.
+grep -hoE 'ghcr\.io/opuspopuli/[a-z0-9-]+' $COMPOSE_FILES | sort -u | while read -r repo; do
   # Only tag what is actually held locally. A service present in the compose
   # file but never pulled has no image to protect, and `docker tag` failing
   # would abort the whole deploy under `set -e`.
