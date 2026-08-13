@@ -138,6 +138,25 @@ x-backend-env: &backend-env
   SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-noreply@opuspopuli.org}
   FRONTEND_URL: ${FRONTEND_URL:-https://opuspopuli.org}
 
+# Docker's json-file driver defaults to NO rotation and NO size cap, so every
+# container log grew without bound. Measured 2026-08-13: region-worker's log was
+# 3,488 MB and loki's 247 MB, and nothing ever reclaimed either.
+#
+# That is a second, independent route to the disk exhaustion that took this node
+# down the same day — the Docker VM disk is fixed at 322 GB, and when it hit
+# 100% Postgres crash-looped on `could not write lock file "postmaster.pid": No
+# space left on device`, Redis failed its AOF write, and a 4-hour re-sync died.
+# Dangling images were the larger cause and `bin/op-deploy` now prunes them;
+# logs had no equivalent, and a full re-sync adds multiple GB every time.
+#
+# 50m x 5 keeps a per-container ceiling of 250 MB — roughly 12 GB across the
+# stack at worst, against 322 GB total. Ample history for debugging, bounded.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: '50m'
+    max-file: '5'
+
 x-healthcheck: &healthcheck
   test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
   interval: 15s
@@ -176,6 +195,7 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:2026.2.0
     container_name: opuspopuli-cloudflared
+    logging: *logging
     profiles: [public]
     command: tunnel run
     environment:
@@ -221,6 +241,7 @@ services:
   opuspopuli-db:
     image: supabase/postgres:17.6.1.138
     container_name: opuspopuli-db
+    logging: *logging
     environment:
       # supabase_admin (not postgres) is the BOOTSTRAP SUPERUSER. The image's
       # 10000000000000_demote-postgres.sql migration ALTER ROLE postgres
@@ -307,6 +328,7 @@ services:
   supabase-kong:
     image: kong/kong:3.9.1
     container_name: opuspopuli-supabase-kong
+    logging: *logging
     restart: unless-stopped
     # Publish kong on the host so SUPABASE_URL=http://localhost:8000 works
     # for browsers + platform services running outside this compose, and
@@ -348,6 +370,7 @@ services:
   supabase-auth:
     image: supabase/gotrue:v2.189.0
     container_name: opuspopuli-supabase-auth
+    logging: *logging
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
@@ -397,6 +420,7 @@ services:
   supabase-rest:
     image: postgrest/postgrest:v14.12
     container_name: opuspopuli-supabase-rest
+    logging: *logging
     restart: unless-stopped
     # No healthcheck: postgrest ships as a `scratch` image — no shell, no
     # curl/wget/nc, no `postgrest --dump-config` exec context that Docker
@@ -422,6 +446,7 @@ services:
   supabase-storage:
     image: supabase/storage-api:v1.60.4
     container_name: opuspopuli-supabase-storage
+    logging: *logging
     restart: unless-stopped
     # Use node (which is definitely in the image — it's a node app) for the
     # healthcheck. `wget` in the alpine variant of storage-api:v1.60.4 fails
@@ -466,6 +491,7 @@ services:
   supabase-meta:
     image: supabase/postgres-meta:v0.96.6
     container_name: opuspopuli-supabase-meta
+    logging: *logging
     restart: unless-stopped
     depends_on:
       opuspopuli-db:
@@ -486,6 +512,7 @@ services:
   supabase-studio:
     image: supabase/studio:2026.06.03-sha-0bca601
     container_name: opuspopuli-supabase-studio
+    logging: *logging
     profiles: [studio]
     restart: unless-stopped
     depends_on:
@@ -514,6 +541,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: opuspopuli-redis
+    logging: *logging
     command: redis-server --appendonly yes --maxmemory-policy noeviction
     volumes:
       - redis-data:/data
@@ -541,6 +569,7 @@ services:
   redis-cache:
     image: redis:7-alpine
     container_name: opuspopuli-redis-cache
+    logging: *logging
     command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -565,6 +594,7 @@ services:
   db-migrate:
     image: ghcr.io/opuspopuli/db-migrate:${TAG:-latest}
     container_name: opuspopuli-db-migrate
+    logging: *logging
     environment:
       <<: *backend-env
     depends_on:
@@ -588,6 +618,7 @@ services:
   users:
     image: ghcr.io/opuspopuli/users:${TAG:-latest}
     container_name: opuspopuli-users
+    logging: *logging
     environment:
       <<: *backend-env
       APPLICATION: users
@@ -612,6 +643,7 @@ services:
   documents:
     image: ghcr.io/opuspopuli/documents:${TAG:-latest}
     container_name: opuspopuli-documents
+    logging: *logging
     environment:
       <<: *backend-env
       APPLICATION: documents
@@ -636,6 +668,7 @@ services:
   knowledge:
     image: ghcr.io/opuspopuli/knowledge:${TAG:-latest}
     container_name: opuspopuli-knowledge
+    logging: *logging
     environment:
       <<: [*backend-env, *llm-env]
       APPLICATION: knowledge
@@ -669,6 +702,7 @@ services:
   region:
     image: ghcr.io/opuspopuli/region:${TAG:-latest}
     container_name: opuspopuli-region
+    logging: *logging
     environment:
       <<: [*backend-env, *llm-env]
       APPLICATION: region
@@ -701,6 +735,7 @@ services:
   region-worker:
     image: ghcr.io/opuspopuli/region-worker:${TAG:-latest}
     container_name: opuspopuli-region-worker
+    logging: *logging
     environment:
       <<: [*backend-env, *llm-env]
       APPLICATION: region-worker
@@ -741,6 +776,7 @@ services:
   structural-analysis-worker:
     image: ghcr.io/opuspopuli/structural-analysis-worker:${TAG:-latest}
     container_name: opuspopuli-structural-analysis-worker
+    logging: *logging
     environment:
       <<: [*backend-env, *llm-env]
       APPLICATION: structural-analysis-worker
@@ -768,6 +804,7 @@ services:
   llm-rerank-worker:
     image: ghcr.io/opuspopuli/llm-rerank-worker:${TAG:-latest}
     container_name: opuspopuli-llm-rerank-worker
+    logging: *logging
     environment:
       <<: [*backend-env, *llm-env]
       APPLICATION: llm-rerank-worker
@@ -807,6 +844,7 @@ services:
   api:
     image: ghcr.io/opuspopuli/api:${TAG:-latest}
     container_name: opuspopuli-api
+    logging: *logging
     environment:
       <<: *backend-env
       APPLICATION: api
@@ -843,6 +881,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.51.0
     container_name: opuspopuli-prometheus
+    logging: *logging
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/prometheus-alerts.yml:/etc/prometheus/alerts/prometheus-alerts.yml:ro
@@ -862,6 +901,7 @@ services:
   loki:
     image: grafana/loki:3.4.2
     container_name: opuspopuli-loki
+    logging: *logging
     volumes:
       - ./observability/loki.yml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki
@@ -872,7 +912,17 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: 512M
+          # Raised from 512M. Loki sat at ~305 MiB (60% of the old cap) while
+          # completely idle; a Grafana dashboard's LogQL queries pushed it over
+          # and the process exited. `unless-stopped` restarted it, so nothing
+          # looked broken — the dashboards just failed, and the container had
+          # accumulated 120 restarts. Restarts climbed 111 -> 120 while
+          # dashboards were open and stopped as soon as they were closed.
+          #
+          # It presented as "lost connection to Grafana", but Grafana had been
+          # up for days and cloudflared had zero restarts. Loki was dying under
+          # the load of being queried — i.e. exactly when it was needed.
+          memory: 2G
         reservations:
           cpus: '0.1'
           memory: 256M
@@ -880,6 +930,7 @@ services:
   promtail:
     image: grafana/promtail:3.4.2
     container_name: opuspopuli-promtail
+    logging: *logging
     volumes:
       - ./observability/promtail.yml:/etc/promtail/config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -903,6 +954,7 @@ services:
   tempo:
     image: grafana/tempo:2.7.2
     container_name: opuspopuli-tempo
+    logging: *logging
     command: ["-config.file=/etc/tempo.yml"]
     volumes:
       - ./observability/tempo.yml:/etc/tempo.yml:ro
@@ -922,6 +974,7 @@ services:
   grafana:
     image: grafana/grafana:10.4.1
     container_name: opuspopuli-grafana
+    logging: *logging
     environment:
       # GRAFANA_ADMIN_PASSWORD is generated per-node into the Keychain by
       # `create-op-node bootstrap` and exported by the op-compose wrapper, so a
