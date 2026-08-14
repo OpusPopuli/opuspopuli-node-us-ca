@@ -37,8 +37,9 @@ terminates TLS at the edge and speaks plain HTTP to Kong over the Docker
 network. The URL field takes `host:port`, no scheme.
 
 **App (frontend) — a Workers custom domain, NOT a tunnel hostname.** It is
-declared in `apps/frontend/wrangler.toml` in the monorepo and created by
-`pnpm cf:deploy`:
+declared in `apps/frontend/wrangler.toml` in the monorepo and created by the
+deploy — normally `deploy-frontend.yml` firing on a `frontend-v*` tag, or
+`pnpm cf:deploy` if you are using the break-glass path:
 
 ```toml
 [[routes]]
