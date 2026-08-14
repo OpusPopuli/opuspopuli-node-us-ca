@@ -200,6 +200,7 @@ scripts/
   start-prod.sh                           Health-check + pull + up
 docs/
   mac-studio-bootstrap.md                 Full step-by-step Studio runbook
+  public-launch.md                        Taking a node public: DNS, auth URLs, cookies
 ```
 
 ## License
