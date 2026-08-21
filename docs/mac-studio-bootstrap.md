@@ -28,7 +28,7 @@ The pgsodium key file path and LaunchAgent label use the stable `opuspopuli` pla
 | Decision | Choice |
 |---|---|
 | Edge / TLS | Cloudflare Tunnel |
-| Frontend | Cloudflare Pages (already deploys via `pnpm cf:deploy`) |
+| Frontend | Cloudflare **Worker** (not Pages). Deployed from GitHub Actions on a `frontend-v*` tag, not from the Studio |
 | Backend images | Built in GitHub Actions, pushed to `ghcr.io/opuspopuli/*`, Studio pulls — no local builds |
 | Container runtime | Docker Desktop — see [`docker-resources.md`](./docker-resources.md) for the full memory / CPU / disk-image sizing table. **Never reduce the disk image size — set it large up front (300 GB recommended for a 1 TB Studio).** |
 | Storage | Internal 1 TB SSD, Docker-managed named volumes |
@@ -372,11 +372,18 @@ The prod compose already references `ghcr.io/opuspopuli/<service>:${TAG:-latest}
    ```
    NEXT_PUBLIC_GRAPHQL_URL=https://api.<your-domain>/api
    ```
-   Deploy:
+   Deploy by tagging in the monorepo — **not** from this Studio:
    ```bash
-   cd apps/frontend
-   pnpm cf:deploy
+   git tag frontend-v1.0.0 && git push origin frontend-v1.0.0
    ```
+   `deploy-frontend.yml` builds and deploys the Worker after you approve it in the
+   `production` environment. `NEXT_PUBLIC_*` values come from the repository
+   variables, since they are inlined at build time and cannot be changed
+   afterwards without a rebuild.
+
+   `pnpm cf:deploy` from `apps/frontend` still works, but it is break-glass only:
+   it ships your working tree using env files that exist on one machine, and
+   leaves no record of what was deployed.
 
 4. **End-to-end browser check.** Visit `https://app.<your-domain>`. Sign up → magic link arrives via Resend → add address → `/region` page renders representatives + committees → click into a committee → all four layers render.
 
