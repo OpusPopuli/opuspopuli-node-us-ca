@@ -630,6 +630,39 @@ services:
           cpus: '0.1'
           memory: 128M
 
+  # Create the private object-storage bucket the documents service uploads
+  # petition scans into. The bucket lives in Supabase Storage's schema, which
+  # supabase-storage creates on first boot — so this one-shot waits for it to
+  # be healthy, then upserts the bucket. Idempotent (ON CONFLICT DO NOTHING),
+  # so it is safe to run on every `up -d`. Without it a fresh node accepts a
+  # scan, stores nothing, and 500s with "Failed to get signed URL".
+  storage-seed:
+    image: supabase/postgres:17.6.1.138
+    container_name: opuspopuli-storage-seed
+    logging: *logging
+    environment:
+      <<: *backend-env
+    depends_on:
+      opuspopuli-db:
+        condition: service_healthy
+      supabase-storage:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -c "insert into storage.buckets (id, name, public) values ('documents', 'documents', false) on conflict (id) do nothing;"
+    networks:
+      - opuspopuli-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
   # ---------------------------------------------------------------------------
   # NestJS Microservices
   # ---------------------------------------------------------------------------
@@ -663,7 +696,10 @@ services:
     container_name: opuspopuli-documents
     logging: *logging
     environment:
-      <<: *backend-env
+      # documents runs the petition-scan LLM analysis, so it needs the Ollama
+      # URL/model like the other AI services. Without *llm-env it fell back to
+      # in-container localhost:11434 and every analysis failed "fetch failed".
+      <<: [*backend-env, *llm-env]
       APPLICATION: documents
       DESCRIPTION: Documents microservice
       PORT: 8080
