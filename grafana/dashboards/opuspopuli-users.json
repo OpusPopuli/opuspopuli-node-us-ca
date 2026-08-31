@@ -1,0 +1,551 @@
+{
+  "uid": "opuspopuli-users",
+  "title": "OPUSPOPULI Users",
+  "description": "Signup, activation and retention, read straight from Postgres.\n\nPrometheus carries no auth or user metrics \u2014 MetricsService has no signup or login counters \u2014 so these panels query the database rather than the metrics store. That also means full history from the first account rather than from whenever a counter shipped.\n\nPRIVACY: aggregates only. No panel selects email, name, IP address or street address, and geography stops at state. The datasource is expected to be a READ-ONLY role \u2014 see docs/guides/user-dashboard.md.",
+  "tags": ["opuspopuli", "users", "growth"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "editable": true,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total users",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Accounts that exist right now. Soft-deleted accounts are excluded \u2014 deleted_at IS NULL is the definition of an account everywhere else in the codebase, and a dashboard that counted them would drift from every other number we quote.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"total\"\nFROM users\nWHERE deleted_at IS NULL",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 2,
+      "title": "New in last 7 days",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Independent of the dashboard time range on purpose: this is the number you want when someone asks 'how is signup going' regardless of what the picker is set to.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"new\"\nFROM users\nWHERE deleted_at IS NULL\n  AND created > now() - interval '7 days'",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Active in last 24h",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Distinct users with session activity in the last 24h. Approximate: user_sessions stores only the most recent activity per session, so a user active yesterday and today counts once, on today.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(DISTINCT user_id) AS \"active\"\nFROM user_sessions\nWHERE revoked_at IS NULL\n  AND last_activity_at > now() - interval '24 hours'",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Returning users",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Accounts that have logged in more than once. The single most useful early signal that the product is worth coming back to \u2014 a signup is a promise, a second login is evidence.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"2+ logins\"\nFROM user_logins l\nJOIN users u ON u.id = l.user_id\nWHERE u.deleted_at IS NULL\n  AND l.login_count >= 2",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Accounts locked now",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Lockouts in force. A rising number here is either an attack or a broken login flow, and both want looking at today rather than in the weekly review.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) AS \"locked\"\nFROM user_logins l\nJOIN users u ON u.id = l.user_id\nWHERE u.deleted_at IS NULL\n  AND l.locked_until > now()",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Commitments acknowledged",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Share of accounts that have acknowledged the public ethical commitments (#754). Falling below 100% means people are getting past onboarding without the step firing.",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT round(\n         100.0 * count(*) FILTER (WHERE commitments_acknowledged_at IS NOT NULL)\n         / nullif(count(*), 0)\n       , 1) AS \"percent\"\nFROM users\nWHERE deleted_at IS NULL",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 7,
+      "title": "Signups per day",
+      "type": "timeseries",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Respects the dashboard time range.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  date_trunc('day', created) AS time,\n  count(*) AS \"signups\"\nFROM users\nWHERE deleted_at IS NULL\n  AND $__timeFilter(created)\nGROUP BY 1\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "Cumulative users",
+      "type": "timeseries",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Cumulative WITHIN the selected range \u2014 it starts from zero at the range start, so it is a growth shape, not an all-time total. 'Total users' above is the all-time number.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  date_trunc('day', created) AS time,\n  sum(count(*)) OVER (ORDER BY date_trunc('day', created)) AS \"total\"\nFROM users\nWHERE deleted_at IS NULL\n  AND $__timeFilter(created)\nGROUP BY 1\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 9,
+      "title": "Onboarding funnel",
+      "type": "bargauge",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Where people stop. Address-geocoded is the step worth watching: an address that never geocodes yields no jurisdictions, and a user with no jurisdictions sees a generic product.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT 'signed up' AS stage, count(*)::int AS users\nFROM users WHERE deleted_at IS NULL\nUNION ALL\nSELECT 'acknowledged commitments', count(*)::int\nFROM users WHERE deleted_at IS NULL AND commitments_acknowledged_at IS NOT NULL\nUNION ALL\nSELECT 'added an address', count(DISTINCT u.id)::int\nFROM users u JOIN user_addresses a ON a.user_id = u.id\nWHERE u.deleted_at IS NULL\nUNION ALL\nSELECT 'address geocoded', count(DISTINCT u.id)::int\nFROM users u JOIN user_addresses a ON a.user_id = u.id\nWHERE u.deleted_at IS NULL AND a.geocoded_at IS NOT NULL\nUNION ALL\nSELECT 'scanned something', count(DISTINCT d.user_id)::int\nFROM documents d JOIN users u ON u.id = d.user_id\nWHERE u.deleted_at IS NULL",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": true
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "How people sign in",
+      "type": "piechart",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Passkey vs magic link. Drives where auth effort goes next.",
+      "gridPos": {
+        "h": 9,
+        "w": 6,
+        "x": 12,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT coalesce(auth_strategy, 'unrecorded') AS metric, count(*) AS value\nFROM users\nWHERE deleted_at IS NULL\nGROUP BY 1\nORDER BY 2 DESC",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": true
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Users by state",
+      "type": "piechart",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "State only, never city. A state-level count of a civic product is a rollout metric; a city-level one starts to describe individuals, which an ops dashboard has no business doing.",
+      "gridPos": {
+        "h": 9,
+        "w": 6,
+        "x": 18,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT a.state AS metric, count(DISTINCT a.user_id) AS value\nFROM user_addresses a\nJOIN users u ON u.id = a.user_id\nWHERE u.deleted_at IS NULL\n  AND a.is_primary\nGROUP BY 1\nORDER BY 2 DESC",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": true
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Daily active users",
+      "type": "timeseries",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Approximate, and understates the past: user_sessions keeps only the latest activity per session, so a long-lived session contributes one point on its most recent day rather than one per day it was used. Trend is meaningful; absolute history is not.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  date_trunc('day', last_activity_at) AS time,\n  count(DISTINCT user_id) AS \"active users\"\nFROM user_sessions\nWHERE last_activity_at IS NOT NULL\n  AND $__timeFilter(last_activity_at)\nGROUP BY 1\nORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "title": "Signups by week and method",
+      "type": "table",
+      "datasource": {
+        "type": "postgres",
+        "uid": "opuspopuli-postgres"
+      },
+      "description": "Aggregates only. No dashboard panel selects email, name, IP address or street address \u2014 see the header note.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "opuspopuli-postgres"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  to_char(date_trunc('week', created), 'YYYY-MM-DD') AS \"week of\",\n  coalesce(auth_strategy, 'unrecorded') AS \"method\",\n  count(*) AS \"signups\"\nFROM users\nWHERE deleted_at IS NULL\n  AND $__timeFilter(created)\nGROUP BY 1, 2\nORDER BY 1 DESC, 3 DESC",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

@@ -1041,6 +1041,16 @@ services:
       # it Grafana advertises http://localhost:3000, which is wrong for anyone
       # not sitting at the node.
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3101}
+      # Read-only Postgres behind the Users dashboard. The role must exist on
+      # this node's database before the datasource will connect; the grant is
+      # in docs/guides/user-dashboard.md (opuspopuli repo). GRAFANA_DB_PASSWORD
+      # follows GRAFANA_ADMIN_PASSWORD: Keychain via the op-compose wrapper,
+      # never a literal here.
+      GRAFANA_DB_HOST: ${GRAFANA_DB_HOST:-opuspopuli-db:5432}
+      GRAFANA_DB_NAME: ${GRAFANA_DB_NAME:-postgres}
+      GRAFANA_DB_USER: ${GRAFANA_DB_USER:-grafana_ro}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-}
+      GRAFANA_DB_SSLMODE: ${GRAFANA_DB_SSLMODE:-disable}
     volumes:
       - grafana-data:/var/lib/grafana
       # Datasources and dashboard providers as code (Loki/Prometheus/Tempo).
