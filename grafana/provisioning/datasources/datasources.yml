@@ -32,3 +32,34 @@ datasources:
     uid: tempo
     access: proxy
     url: http://tempo:3200
+
+  # Postgres - the Users dashboard (added 2026-08-31).
+  #
+  # The platform exposes no auth/user metrics to Prometheus, so signup and
+  # activation are read from the database directly. Two rules come with that:
+  #
+  #   1. READ-ONLY role. Grafana panels are editable SQL and this database
+  #      holds real accounts - CCPA personal information. The role is granted
+  #      SELECT on five tables with `default_transaction_read_only = on`, not
+  #      blanket read. The exact grant is in docs/guides/user-dashboard.md in
+  #      the opuspopuli repo.
+  #   2. No credentials in this file. GRAFANA_DB_PASSWORD comes from the
+  #      environment, the same way GRAFANA_ADMIN_PASSWORD does - Keychain via
+  #      the op-compose wrapper on a bootstrapped node.
+  #
+  # Grafana expands ${VAR} here; the `:-default` form is compose syntax and
+  # does NOT work in provisioning files, so the defaults live in the compose.
+  - name: OpusPopuli DB
+    uid: opuspopuli-postgres
+    type: postgres
+    access: proxy
+    url: ${GRAFANA_DB_HOST}
+    database: ${GRAFANA_DB_NAME}
+    user: ${GRAFANA_DB_USER}
+    editable: false
+    secureJsonData:
+      password: ${GRAFANA_DB_PASSWORD}
+    jsonData:
+      sslmode: ${GRAFANA_DB_SSLMODE}
+      postgresVersion: 1500
+      timescaledb: false
