@@ -153,3 +153,45 @@ docker image prune -f
 echo ""
 echo "==> Docker VM disk after:"
 disk_usage
+
+# ── 4. Backup-service presence check (opuspopuli#1217) ──────────────────────
+# This script deliberately does NOT manage docker-compose-backup.yml (see the
+# default-set comment above): the backup service is an on-demand scheduler,
+# not part of the app stack, and layering it here would recreate it on every
+# deploy.
+#
+# The cost of that choice, learned the hard way: nothing restores the backup
+# container either. It stopped on 2026-07-23 after a clean run, the container
+# and image went away, and every deploy since rebuilt the app stack around
+# the hole without a word. It was found 50 days later by reading a plan
+# document, not by any signal from this machine.
+#
+# So: still do not manage it — but never again fail to MENTION it. This is a
+# warning, not a gate; a deploy must not fail because an unrelated overlay is
+# down, and the exit status stays 0 either way.
+echo ""
+echo "==> Backup service"
+if docker ps --filter "name=opuspopuli-backup" --filter "status=running" \
+     --format {{.Names}} | grep -q .; then
+  newest=$(ls -t "${BACKUPS_DIR_HOST:-/Volumes/OpusPopuli/backups}"/opuspopuli-db-*.dump.gz \
+           2>/dev/null | head -1)
+  if [ -n "$newest" ]; then
+    age_days=$(( ( $(date +%s) - $(stat -f %m "$newest" 2>/dev/null || echo 0) ) / 86400 ))
+    if [ "$age_days" -gt 2 ]; then
+      echo "    WARNING: scheduler is running but the newest snapshot is ${age_days}d old."
+      echo "             Check: docker logs opuspopuli-backup"
+    else
+      echo "    running; newest snapshot ${age_days}d old"
+    fi
+  else
+    echo "    WARNING: scheduler is running but NO snapshots exist yet."
+  fi
+else
+  echo "    WARNING: opuspopuli-backup is NOT running — this node has no backups."
+  echo "             op-deploy does not manage the backup overlay by design."
+  echo "             Start it with:"
+  echo "               ./bin/op-compose -f docker-compose-prod.yml \\"
+  echo "                                -f docker-compose-prompt-service.yml \\"
+  echo "                                -f docker-compose-backup.yml \\"
+  echo "                                up -d opuspopuli-backup"
+fi
