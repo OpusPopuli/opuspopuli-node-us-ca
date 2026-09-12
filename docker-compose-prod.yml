@@ -155,6 +155,43 @@ x-backend-env: &backend-env
   SMTP_PASS: ${SMTP_PASS:-PLACEHOLDER_smtp_pass_emails_fail_until_seeded_in_vault}
   SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-noreply@opuspopuli.org}
   FRONTEND_URL: ${FRONTEND_URL:-https://opuspopuli.org}
+  # Embeddings — SHARED, not knowledge-only.
+  #
+  # These lived on the `knowledge` service alone, under the comment "knowledge
+  # is the ONLY service that generates them (RAG)". That was never true:
+  # `region` embeds the proposition corpus (PropositionEmbeddingService) and
+  # `documents` embeds petition scans (RetrievalService). It was harmless only
+  # because those two fell through to the backend's own default and MiniLM's
+  # 384 width happened to match the columns.
+  #
+  # After the 768 cutover (opuspopuli#1156) it stops being harmless: an
+  # operator setting EMBEDDINGS_PROVIDER=ollama would move ONLY knowledge to
+  # nomic while region and documents kept embedding in-process. Nothing would
+  # error — the widths still agree — so the corpus would silently end up in two
+  # different similarity spaces, and the Spanish parity the switch was made for
+  # would never reach the propositions. `embedding_model` on each row is what
+  # would eventually reveal it, after the fact.
+  #
+  # Bound here so one env var moves the whole node, which is what
+  # "one embedding model in production" requires.
+  EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-xenova}
+  # Containers cannot reach the native Ollama daemon on localhost — that
+  # resolves to the container itself. This in-network default overrides the
+  # backend's localhost default.
+  EMBEDDINGS_OLLAMA_URL: ${EMBEDDINGS_OLLAMA_URL:-http://host.docker.internal:11434}
+  # v2-moe, NOT plain `nomic-embed-text`. They are different models: the bare
+  # name is v1.5, which scores 0/14 top-1 on the real proposition corpus
+  # because every AG ballot title shares the same boilerplate and its
+  # similarity space saturates on it. Nothing errors — retrieval just stops
+  # being right. Corrected in opuspopuli#1231; this default was the same gun
+  # still loaded on the node side.
+  EMBEDDINGS_OLLAMA_MODEL: ${EMBEDDINGS_OLLAMA_MODEL:-nomic-embed-text-v2-moe:latest}
+  # Width of the knowledge-RAG vector table, which must equal
+  # EMBEDDING_DIMENSIONS in @opuspopuli/common. It only applies when the table
+  # is CREATED — `CREATE TABLE IF NOT EXISTS` will not widen an existing one —
+  # so a disagreement surfaces as a runtime insert failure with no startup
+  # signal, not as a boot error.
+  VECTORDB_DIMENSIONS: ${VECTORDB_DIMENSIONS:-768}
 
 # Docker's json-file driver defaults to NO rotation and NO size cap, so every
 # container log grew without bound. Measured 2026-08-13: region-worker's log was
@@ -728,15 +765,9 @@ services:
       APPLICATION: knowledge
       DESCRIPTION: Knowledge microservice
       PORT: 8080
-      # Embeddings — knowledge is the ONLY service that generates them (RAG).
-      # Default provider is xenova (in-process); operators who set
-      # EMBEDDINGS_PROVIDER=ollama in .env also get the model + host-reachable
-      # Ollama URL bound here. The in-network default overrides the backend's
-      # localhost default (which points at the container itself). Env NAMES
-      # match packages/config-provider/src/configs/embeddings.config.ts (#36).
-      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-xenova}
-      EMBEDDINGS_OLLAMA_URL: ${EMBEDDINGS_OLLAMA_URL:-http://host.docker.internal:11434}
-      EMBEDDINGS_OLLAMA_MODEL: ${EMBEDDINGS_OLLAMA_MODEL:-nomic-embed-text}
+      # Embeddings now live in *backend-env — region and documents generate
+      # them too, so binding them here alone put the node one env var away
+      # from a two-model corpus. See the block there.
     depends_on:
       db-migrate:
         condition: service_completed_successfully
