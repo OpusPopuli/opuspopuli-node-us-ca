@@ -186,6 +186,29 @@ x-backend-env: &backend-env
   # being right. Corrected in opuspopuli#1231; this default was the same gun
   # still loaded on the node side.
   EMBEDDINGS_OLLAMA_MODEL: ${EMBEDDINGS_OLLAMA_MODEL:-nomic-embed-text-v2-moe:latest}
+
+  # ── Petition OCR (opuspopuli#1050) ──────────────────────────────────────
+  #
+  # `vision` reads the page with a local vision-language model instead of
+  # Tesseract. Measured on this node against the live propositions corpus,
+  # same petition: Tesseract matched 0 of 5 real scans (page confidence 27-42,
+  # four rejected as `unreadable`), while qwen2.5vl:7b retrieved the correct
+  # measure at rank 1 on every run, margin ~0.155.
+  #
+  # Costs 16-21s per scan against Tesseract's 4-7s. That is the trade: a slow
+  # right answer for a fast wrong one.
+  OCR_PROVIDER: ${OCR_PROVIDER:-vision}
+  #
+  # Pinned SEPARATELY from LLM_MODEL, and it must stay that way. Inference is
+  # moving to a US-provenance model (OLMo) which has no vision capability at
+  # all — wiring OCR to LLM_MODEL would mean petition scanning silently
+  # breaking on the day that switch lands. Keeping it distinct also confines
+  # the Qwen-derived model to one declared job, in one auditable value.
+  #
+  # Requires `ollama pull qwen2.5vl:7b` (6.0 GB) on the host. The service
+  # fails per scan, not at boot, if it is missing.
+  OCR_VISION_MODEL: ${OCR_VISION_MODEL:-qwen2.5vl:7b}
+  OCR_VISION_URL: ${OCR_VISION_URL:-http://host.docker.internal:11434}
   # Width of the knowledge-RAG vector table, which must equal
   # EMBEDDING_DIMENSIONS in @opuspopuli/common. It only applies when the table
   # is CREATED — `CREATE TABLE IF NOT EXISTS` will not widen an existing one —
