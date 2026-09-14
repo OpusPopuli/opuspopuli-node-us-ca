@@ -197,7 +197,15 @@ x-backend-env: &backend-env
   #
   # Costs 16-21s per scan against Tesseract's 4-7s. That is the trade: a slow
   # right answer for a fast wrong one.
-  OCR_PROVIDER: ${OCR_PROVIDER:-vision}
+  # Shared default is TESSERACT; vision is opted into per service below.
+  #
+  # `vision` requires the consuming module to register an OCR_PROMPT_SUPPLIER,
+  # and only `documents` does — it is the only service that reads petition
+  # photographs. `region` imports OcrModule too, for scraping-pipeline PDF
+  # extraction, and has no such supplier: setting vision here crash-looped it
+  # at boot on the v1.27.0 deploy. Vision would also be wrong for it on the
+  # merits — 16-21s per document, with a petition-transcription prompt.
+  OCR_PROVIDER: ${OCR_PROVIDER:-tesseract}
   #
   # Pinned SEPARATELY from LLM_MODEL, and it must stay that way. Inference is
   # moving to a US-provenance model (OLMo) which has no vision capability at
@@ -760,6 +768,9 @@ services:
       # URL/model like the other AI services. Without *llm-env it fell back to
       # in-container localhost:11434 and every analysis failed "fetch failed".
       <<: [*backend-env, *llm-env]
+      # The only service that reads petition photographs, and the only one
+      # registering an OCR_PROMPT_SUPPLIER (opuspopuli#1050).
+      OCR_PROVIDER: ${DOCUMENTS_OCR_PROVIDER:-vision}
       APPLICATION: documents
       DESCRIPTION: Documents microservice
       PORT: 8080
