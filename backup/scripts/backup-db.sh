@@ -26,6 +26,24 @@ RETENTION_DAYS="${RETENTION_DAYS:-7}"
 LOCK_WAIT="${BACKUP_LOCK_WAIT:-true}"
 GIT_SHA="${GIT_SHA:-unknown}"
 
+# Prometheus textfile metrics (opuspopuli#1217). Label by the artifact the
+# job produces, not by PGDATABASE — "opuspopuli-db" is what an operator
+# reading an alert recognises; PGDATABASE is just "postgres".
+# shellcheck source=backup/scripts/metrics.sh
+if [[ -r "$(dirname "$0")/metrics.sh" ]]; then
+  . "$(dirname "$0")/metrics.sh"
+  metrics_init "opuspopuli-db"
+else
+  # Metrics must never be able to break a backup. `set -e` would turn a
+  # missing metrics.sh (partial checkout, stale bind mount, older image)
+  # into a failed backup — the monitoring killing the thing it monitors.
+  # Degrade to no-ops instead; the absent series then trips BackupMissing,
+  # which is exactly the loud-not-silent behaviour we want.
+  metrics_init() { :; }
+  metrics_write() { :; }
+  metrics_prev_success() { echo 0; }
+fi
+
 log_json() {
   local line
   line="{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"backup\",$1}"
@@ -54,7 +72,11 @@ FILENAME="opuspopuli-db-${GIT_SHA}-${TIMESTAMP}.dump.gz"
 TMP_DUMP="${BACKUPS_DIR}/.${FILENAME}.partial"
 FINAL_PATH="${BACKUPS_DIR}/${FILENAME}"
 ERR_FILE="${BACKUPS_DIR}/.backup.lasterr"
-START_MS="$(date +%s%3N)"
+# BusyBox `date` (this image's /bin/sh is busybox, and there is no
+# coreutils `date`) silently ignores `%N`, so `date +%s%3N` returned
+# plain SECONDS. The duration below was therefore seconds wearing a
+# millisecond label — see opuspopuli#1217. Measure seconds and say so.
+START_S="$(date +%s)"
 
 cleanup() {
   rm -f "${TMP_DUMP}"
@@ -68,12 +90,15 @@ if ! pg_dump --format=custom --no-owner --no-acl --compress=0 2> "${ERR_FILE}" \
      | gzip -9 > "${TMP_DUMP}"; then
   STDERR_TRUNCATED="$(tr '\n' ' ' < "${ERR_FILE}" 2>/dev/null | head -c 500 | sed 's/"/\\"/g')"
   log_json "\"status\":\"error\",\"reason\":\"pg_dump_or_gzip_failed\",\"stderr\":\"${STDERR_TRUNCATED}\""
+  # status=0 but keep the previous success timestamp, so staleness keeps
+  # accruing and BackupFailing escalates to BackupStale at 36h.
+  metrics_write 0 "$(metrics_prev_success)" 0 0
   exit 1
 fi
 
 mv "${TMP_DUMP}" "${FINAL_PATH}"
 BYTES="$(stat -c%s "${FINAL_PATH}" 2>/dev/null || stat -f%z "${FINAL_PATH}")"
-DURATION_MS=$(( $(date +%s%3N) - START_MS ))
+DURATION_S=$(( $(date +%s) - START_S ))
 
 # 5. Prune snapshots older than retention window. Failures non-fatal.
 PURGED=0
@@ -87,4 +112,5 @@ fi
 rm -f "${PURGE_LIST}"
 
 # 6. Success log. Both stdout (docker logs) and appended to backup.log.
-log_json "\"status\":\"ok\",\"file\":\"${FILENAME}\",\"bytes\":${BYTES},\"duration_ms\":${DURATION_MS},\"git_sha\":\"${GIT_SHA}\",\"retention_days\":${RETENTION_DAYS},\"retention_purged\":${PURGED}"
+log_json "\"status\":\"ok\",\"file\":\"${FILENAME}\",\"bytes\":${BYTES},\"duration_s\":${DURATION_S},\"git_sha\":\"${GIT_SHA}\",\"retention_days\":${RETENTION_DAYS},\"retention_purged\":${PURGED}"
+metrics_write 1 "$(date +%s)" "${BYTES}" "${DURATION_S}"

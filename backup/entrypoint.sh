@@ -20,6 +20,13 @@ fi
 # historical 03:00 / 03:10 daily behavior, so a node that sets neither var
 # behaves exactly as before. Rendered to a writable path because the container
 # runs as the non-root `postgres` user and can't overwrite the baked /crontab.tmpl.
+# Create the Prometheus textfile directory up front (opuspopuli#1217). It must
+# exist and be writable by THIS container's non-root user before node-exporter
+# reads it. If Docker had to auto-create it for node-exporter's bind mount it
+# would be owned by root, backups could not write there, and metrics would go
+# silently missing — the precise failure class this whole change exists to end.
+mkdir -p "${BACKUPS_DIR:-/backups}/metrics" 2>/dev/null || true
+
 : "${BACKUP_SCHEDULE:=0 3 * * *}"
 : "${BACKUP_PROMPTS_SCHEDULE:=10 3 * * *}"
 CRONTAB_RENDERED="${CRONTAB_RENDERED:-/tmp/opuspopuli-crontab}"
