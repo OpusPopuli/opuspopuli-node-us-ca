@@ -97,3 +97,61 @@ groups:
         annotations:
           summary: "High AI analysis failure rate on {{ $labels.service }}"
           description: "AI analysis failure rate >10% for 5 minutes (current: {{ $value | humanizePercentage }})."
+
+  # Backup freshness — opuspopuli#1217.
+  #
+  # Production backups stopped on 2026-07-23 and nobody noticed for 49 days.
+  # Nothing in the deploy path restarts the backup container (op-deploy
+  # excludes docker-compose-backup.yml by design), so a node that is never
+  # redeployed can go quiet indefinitely. These rules make that loud.
+  #
+  # Source: backup-db.sh / backup-prompts-db.sh write a Prometheus textfile
+  # (.prom) on completion; node_exporter's textfile collector serves it.
+  # If backups stop, the gauge stops advancing and BackupStale fires. If the
+  # node or exporter dies, the series disappears and BackupMissing fires.
+  # Both failure modes must alert — the 2026-07-23 outage was the first kind.
+  - name: opuspopuli-backups
+    rules:
+      # Backups run daily (10:00 UTC main, 10:10 UTC prompts). 36h allows a
+      # single missed window plus slack before paging, so one transient
+      # failure does not wake anyone, but two consecutive ones do.
+      - alert: BackupStale
+        expr: time() - backup_last_success_timestamp_seconds > 129600
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful backup of {{ $labels.database }} in over 36h"
+          description: >-
+            Last successful backup of {{ $labels.database }} was
+            {{ $value | humanizeDuration }} ago (threshold 36h). Check the
+            backup container: `docker ps --filter name=opuspopuli-backup`
+            and /backups/backup.log. See docs/runbooks/restore-drill.md.
+
+      # A silent stop also looks like an absent series — e.g. the backup
+      # container was never started after a reboot, so it never wrote a
+      # .prom file at all. `absent()` is what catches the 2026-07-23 shape.
+      - alert: BackupMissing
+        expr: absent(backup_last_success_timestamp_seconds)
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backup metrics absent — backups may not be running at all"
+          description: >-
+            No backup_last_success_timestamp_seconds series is being
+            scraped. Either node_exporter's textfile collector is down or
+            the backup job has never run on this node.
+
+      # Distinct from staleness: the job ran and failed. Fires sooner
+      # because a known failure needs no waiting period to be credible.
+      - alert: BackupFailing
+        expr: backup_last_status == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Last backup of {{ $labels.database }} failed"
+          description: >-
+            backup-db.sh exited non-zero. Inspect /backups/.backup.lasterr
+            and backup.log. Staleness will escalate to critical at 36h.

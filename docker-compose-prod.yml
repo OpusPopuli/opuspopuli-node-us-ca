@@ -1017,6 +1017,46 @@ services:
           cpus: '0.1'
           memory: 256M
 
+  # Serves the backup freshness gauges that backup-db.sh writes as a
+  # Prometheus textfile (opuspopuli#1217).
+  #
+  # Deliberately lives HERE and not in docker-compose-backup.yml: op-deploy
+  # excludes that overlay by design, which is exactly how production backups
+  # died unnoticed for 49 days in 2026. A watchdog that can be left out of a
+  # deploy is not a watchdog. This way the series is always scraped, so a
+  # missing backup shows up as BackupStale (or BackupMissing) rather than as
+  # silence.
+  #
+  # Only the textfile collector is enabled. The filesystem/cpu/meminfo
+  # collectors would report the CONTAINER's view, not the host's, and are
+  # misleading without --path.rootfs; host-level capacity metrics are a
+  # separate decision (see R4/M1's per-tier store gauges).
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: opuspopuli-node-exporter
+    logging: *logging
+    command:
+      - '--collector.disable-defaults'
+      - '--collector.textfile'
+      - '--collector.textfile.directory=/backups/metrics'
+      - '--web.listen-address=:9100'
+    volumes:
+      # Mount the backups root read-only rather than the metrics subdirectory:
+      # the root already exists with correct ownership, so Docker never has to
+      # auto-create a root-owned path underneath it.
+      - ${BACKUPS_DIR_HOST:-./backups}:/backups:ro
+    networks:
+      - opuspopuli-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+
   loki:
     image: grafana/loki:3.4.2
     container_name: opuspopuli-loki

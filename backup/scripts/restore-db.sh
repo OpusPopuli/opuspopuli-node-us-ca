@@ -120,7 +120,11 @@ if ! flock -x 9; then
   exit 1
 fi
 
-START_MS="$(date +%s%3N)"
+# BusyBox `date` (this image's /bin/sh is busybox, and there is no
+# coreutils `date`) silently ignores `%N`, so `date +%s%3N` returned
+# plain SECONDS. The duration below was therefore seconds wearing a
+# millisecond label — see opuspopuli#1217. Measure seconds and say so.
+START_S="$(date +%s)"
 
 log_json() {
   local line
@@ -200,5 +204,5 @@ EOF
     ;;
 esac
 
-DURATION_MS=$(( $(date +%s%3N) - START_MS ))
-log_json "\"status\":\"ok\",\"mode\":\"${MODE}\",\"snapshot\":\"${SNAPSHOT_BASENAME}\",\"snapshot_sha\":\"${SNAPSHOT_SHA}\",\"current_sha\":\"${CURRENT_SHA}\",\"duration_ms\":${DURATION_MS}"
+DURATION_S=$(( $(date +%s) - START_S ))
+log_json "\"status\":\"ok\",\"mode\":\"${MODE}\",\"snapshot\":\"${SNAPSHOT_BASENAME}\",\"snapshot_sha\":\"${SNAPSHOT_SHA}\",\"current_sha\":\"${CURRENT_SHA}\",\"duration_s\":${DURATION_S}"
