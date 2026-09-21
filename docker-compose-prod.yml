@@ -264,7 +264,33 @@ x-healthcheck: &healthcheck
 # verifies the actually-configured model.
 x-llm-env: &llm-env
   LLM_URL: http://host.docker.internal:11434
+  # The ANALYSIS lane — proposition analysis, minutes summaries, bios, RAG.
+  # Named for its job like every other model setting the node carries;
+  # create-op-node writes LLM_ANALYSIS_MODEL to .env via --analysis-model.
+  #
+  # The nested default keeps a node bootstrapped BEFORE the lane naming
+  # working: its .env has only LLM_MODEL, so that is what resolves. The
+  # backend reads LLM_MODEL last in its own chain as well, so compose and the
+  # services agree whichever key a node happens to carry.
+  LLM_ANALYSIS_MODEL: ${LLM_ANALYSIS_MODEL:-${LLM_MODEL:-qwen2.5:3b}}
+  LLM_ANALYSIS_URL: ${LLM_ANALYSIS_URL:-}
   LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
+  # Ingestion lane (opuspopuli roadmap §6.4). Structural analysis, civics
+  # extraction, detail crawling and PDF extraction are throughput-bound
+  # structured extraction over far more documents than analysis, where
+  # reliable JSON matters and verbatim fidelity does not — so they can run a
+  # smaller model at roughly a tenth the wall clock.
+  #
+  # EMPTY is the meaningful default, not a placeholder: the backend resolves
+  # these with `||`, so an empty string falls through to the analysis lane and
+  # behaves exactly as it did before the split. (It would NOT fall through
+  # under `??`, where an empty string wins — which is why the config uses `||`
+  # deliberately.)
+  #
+  # Set both, or neither: naming a host without a model sends the ANALYSIS
+  # model there, and the backend warns about precisely that at boot.
+  LLM_INGESTION_MODEL: ${LLM_INGESTION_MODEL:-}
+  LLM_INGESTION_URL: ${LLM_INGESTION_URL:-}
 
 services:
   # ---------------------------------------------------------------------------
