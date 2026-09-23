@@ -44,6 +44,7 @@ split depends on which LLM tier you're running on the host.
 | LLM tier         | Example models                                | Ollama RAM | macOS + buffer | Docker Desktop RAM |
 |---|---|---|---|---|
 | 9B class         | `qwen3.5:9b`, `llama3.1:8b`, `mistral:7b`     | ~8 GB      | ~16 GB         | **96 GB**          |
+| 30B MoE (~3B active) | `nemotron-3.5-lightning:30b-a3b`          | ~23 GB     | ~18 GB         | **80 GB**          |
 | 70B class        | `llama3.3:70b-q4`, `qwen2.5:72b-q4`           | ~50 GB     | ~22 GB         | **56 GB**          |
 | Frontier / MoE   | `mixtral:8x22b-q4`, `llama3.1:405b-q4`        | ~80 GB     | ~24 GB         | **24 GB**          |
 
