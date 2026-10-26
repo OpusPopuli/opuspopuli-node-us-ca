@@ -890,6 +890,13 @@ services:
       REGION_SYNC_ENABLED: "true"
       REGION_SYNC_CRON_ENABLED: "${REGION_SYNC_CRON_ENABLED:-true}"
       REGION_SYNC_CRON_VIA_QUEUE: "true"
+      # This worker's stable identity (S2, opuspopuli docs/plans/S2-per-type-sync-jobs.md).
+      # The startup sweep reclaims only the sync rows of the WORKER_HOST it runs
+      # as, and every metric this worker publishes carries it as `worker_host`.
+      # The container hostname would change on every recreate, so it is fixed.
+      # Must be unique per region-worker: give a second host (the CPU lane's
+      # WORKER_QUEUES=pdf-parse runbook) its own value.
+      WORKER_HOST: "${WORKER_HOST:-primary}"
       # Bill enrichment (Phase 6 "summarize") throughput. Concurrency requires
       # OLLAMA_NUM_PARALLEL >= BILL_ENRICHMENT_CONCURRENCY on the native Ollama
       # service, or parallel calls just queue at Ollama. Default 1 = serial (safe).
