@@ -98,6 +98,89 @@ groups:
           summary: "High AI analysis failure rate on {{ $labels.service }}"
           description: "AI analysis failure rate >10% for 5 minutes (current: {{ $value | humanizePercentage }})."
 
+  # Sync prunes — F2 (docs/plans/F2-bill-prune-scope.md).
+  #
+  # A prune hard-deletes, and a bill takes its votes, co-authors and
+  # committee assignments with it, so this is the one pipeline outcome a
+  # re-sync does not repair. The deletion guard caps ONE run at
+  # max(2%, 10 bills); it cannot see a source that quietly drops 1.9% a day,
+  # which stays under the cap every run and removes a session in a month.
+  # The 7-day sum is what catches that.
+  #
+  # Every series these rules read is created at zero when the region service
+  # boots (RegionSyncService.primePruneSeries). prom-client exports a labelled
+  # counter only after its first increment, and increase() cannot see a
+  # series born above zero — so without that, the first refusal or deletion
+  # after a restart, usually the only one on a node that syncs by hand, would
+  # never alert.
+  - name: opuspopuli-sync-prune
+    rules:
+      - alert: SyncBulkDeletion
+        expr: sum by (data_type) (increase(pipeline_rows_deleted_total[7d])) > 100
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.data_type }} sync pruned {{ $value | humanize }} rows in 7 days"
+          description: >-
+            More than 100 {{ $labels.data_type }} rows were deleted by sync
+            prunes over the last week. Deletions cascade and a re-sync does
+            not restore them. Check the discover phase for a source that is
+            returning fewer links than it should before the next sync runs.
+
+      - alert: SyncPruneRefused
+        expr: sum by (data_type) (increase(pipeline_items_total{reason="deletion-guard"}[1d])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.data_type }} prune refused by the deletion guard"
+          description: >-
+            A {{ $labels.data_type }} prune would have deleted more rows than
+            its guard allows, so it deleted nothing. It will keep refusing on
+            every sync until the cause is found — usually a discovery pass
+            that lost a source. The ERROR line in region-worker logs names
+            the first 20 rows it kept.
+
+      # A prune that cannot run is not an error in the sync, so nothing else
+      # reports it — and a source that returns nothing every run disables
+      # pruning for good while each sync completes "successfully".
+      - alert: SyncPruneDisabled
+        expr: sum by (data_type, reason) (increase(pipeline_items_total{phase="prune_stale",reason=~"source-returned-nothing|unidentified-status-urls|no-covered-sessions"}[1d])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.data_type }} prune skipped: {{ $labels.reason }}"
+          description: >-
+            A {{ $labels.data_type }} sync could not trust its discovery pass
+            ({{ $labels.reason }}), so it pruned nothing. A source that
+            returns nothing is also a source that ingested nothing; check the
+            discover phase line in region-worker logs.
+
+  # Child-job queues (propositions Phase B). Job metrics only see a job once
+  # something picks it up, so a queue nobody consumes — a WORKER_QUEUES slip
+  # on a multi-host node, or the consuming host down — is silent everywhere
+  # else.
+  # A pdf-parse requester waits 10 minutes before parsing in process, so a
+  # stall here turns a sync into hours without failing it.
+  - name: opuspopuli-queues
+    rules:
+      - alert: QueueBacklogStalled
+        # Waiting AND nothing running: a busy lane at concurrency 1 holds
+        # jobs for longer than this every sync night, and that is health,
+        # not a stall.
+        expr: >-
+          (max by (queue) (bullmq_queue_oldest_waiting_seconds) > 600)
+          and on (queue)
+          (max by (queue) (bullmq_queue_jobs{state="active"}) == 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.queue }}: oldest waiting job is {{ $value | humanizeDuration }} old"
+          description: >-
+            A job on {{ $labels.queue }} has waited over 10 minutes with
+            nothing running on the queue: nothing consumes it. Check
+            WORKER_QUEUES on every host, and that the consuming host is up.
+
   # Backup freshness — opuspopuli#1217.
   #
   # Production backups stopped on 2026-07-23 and nobody noticed for 49 days.

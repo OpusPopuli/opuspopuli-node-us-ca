@@ -36,7 +36,8 @@ security find-generic-password -s org.opuspopuli.<region> -a grafana-admin-passw
 
 ## What ships
 
-Three dashboards, in the **Opus Populi** folder.
+Five dashboards, in the **Opus Populi** folder: the four below, and **Users**
+(signup and activation, on a read-only Postgres login).
 
 ### Node Health
 
@@ -70,6 +71,27 @@ there means genuinely stalled.
 and `noCommittee`. That split is diagnostic: the first means the join source
 never arrived, the second that it arrived but referenced a committee the node
 does not know about.
+
+### Ingestion Pipeline
+
+Where a sync's time and work go, from the metrics the pipeline emits — the
+companion to Sync Pipeline's log view. Rows:
+
+- **Overview** — items per second by outcome and data type; GPU busy/idle (one
+  Ollama endpoint only); phases aborted.
+- **Skips** — every item outcome with its reason. On an unchanged re-run the
+  skipped share should sit near 100%: `unchanged`, `analysis_current` (a
+  proposition whose analysis is current on every axis), `no_content`. Also
+  where each archived PDF's text came from (`reused`, `lane`, `in_process`).
+- **Child-job queues** — waiting, oldest-waiting, attempts by outcome and job
+  duration, per BullMQ queue. A queue that only grows has no consumer.
+- **Stage timing**, **Inference and GPU lanes**, **CPU lane** (worker CPU
+  against its container limit, `pdf-parse` jobs by host), **Hosts**, **Fetch**.
+
+`worker_host` comes from `WORKER_HOST` (region-worker sets `primary`); panels
+that split by it fall back to the job name where it is unset. The CPU lane can
+move to a second machine with `WORKER_QUEUES` — see `docs/plans/
+propositions-phase-b.md` ("Multi-host runbook") in the opuspopuli repo.
 
 ### API Performance
 
