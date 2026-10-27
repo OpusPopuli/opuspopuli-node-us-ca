@@ -130,7 +130,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, job) (rate(db_query_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, job) (rate(db_lane_query_seconds_bucket[5m])))",
           "legendFormat": "p95 {{job}}"
         }
       ],

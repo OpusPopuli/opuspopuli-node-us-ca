@@ -1,11 +1,11 @@
 {
   "uid": "op-ingestion-pipeline",
   "title": "Ingestion Pipeline",
-  "description": "Where a sync's time and work actually go — Gate 0 of docs/plans/ingestion-resource-lanes.md, and Phase B (docs/plans/propositions-phase-b.md): skips, child-job queues, GPU and CPU lanes, hosts, fetch.\n\nMeasured, not inferred: every panel reads a metric the pipeline emits. The companion Sync Pipeline dashboard answers \"what did this run say\" from log lines; this one answers \"where did it spend itself\".\n\nStill absent, on purpose rather than empty: lazy analysis (row 6) and attribution (row 9) from the plan — they need Postgres grants and per-request attribution that do not exist yet. The `data_type` variable filters item panels only: the stage histogram's `data_type` is set by the bills fetch path alone (see its help text).",
+  "description": "Where a sync's time and work actually go — Gate 0 of docs/plans/ingestion-resource-lanes.md, and Phase B (docs/plans/propositions-phase-b.md): skips, child-job queues, the GPU, CPU, DB and network lanes, hosts.\n\nMeasured, not inferred: every panel reads a metric the pipeline emits. The companion Sync Pipeline dashboard answers \"what did this run say\" from log lines; this one answers \"where did it spend itself\".\n\nStill absent, on purpose rather than empty: lazy analysis (row 6) and attribution (row 9) from the plan — they need Postgres grants and per-request attribution that do not exist yet. The `data_type` variable filters item panels only: the stage histogram's `data_type` is set by the bills fetch path alone (see its help text).",
   "tags": ["opuspopuli", "pipeline", "ingestion"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "30s",
   "time": {
     "from": "now-6h",
@@ -31,13 +31,13 @@
       "title": "Overview",
       "collapsed": false,
       "panels": [],
+      "id": 1,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 0
-      },
-      "id": 1
+      }
     },
     {
       "id": 2,
@@ -262,13 +262,13 @@
       "title": "Skips — is the skip working?",
       "collapsed": false,
       "panels": [],
+      "id": 8,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 14
-      },
-      "id": 8
+      }
     },
     {
       "type": "table",
@@ -320,13 +320,13 @@
         "defaults": {},
         "overrides": []
       },
+      "id": 9,
       "gridPos": {
         "h": 10,
         "w": 14,
         "x": 0,
         "y": 15
-      },
-      "id": 9
+      }
     },
     {
       "type": "stat",
@@ -356,13 +356,13 @@
         },
         "overrides": []
       },
+      "id": 10,
       "gridPos": {
         "h": 5,
         "w": 5,
         "x": 14,
         "y": 15
-      },
-      "id": 10
+      }
     },
     {
       "type": "stat",
@@ -392,13 +392,13 @@
         },
         "overrides": []
       },
+      "id": 11,
       "gridPos": {
         "h": 5,
         "w": 5,
         "x": 19,
         "y": 15
-      },
-      "id": 11
+      }
     },
     {
       "type": "timeseries",
@@ -429,26 +429,26 @@
         },
         "overrides": []
       },
+      "id": 12,
       "gridPos": {
         "h": 5,
         "w": 10,
         "x": 0,
         "y": 25
-      },
-      "id": 12
+      }
     },
     {
       "type": "row",
       "title": "Child-job queues — retrying? backing up?",
       "collapsed": false,
       "panels": [],
+      "id": 13,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 30
-      },
-      "id": 13
+      }
     },
     {
       "type": "timeseries",
@@ -475,13 +475,13 @@
         },
         "overrides": []
       },
+      "id": 14,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 31
-      },
-      "id": 14
+      }
     },
     {
       "type": "timeseries",
@@ -510,13 +510,13 @@
         },
         "overrides": []
       },
+      "id": 15,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 31
-      },
-      "id": 15
+      }
     },
     {
       "type": "timeseries",
@@ -548,13 +548,13 @@
         },
         "overrides": []
       },
+      "id": 16,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 39
-      },
-      "id": 16
+      }
     },
     {
       "type": "timeseries",
@@ -582,13 +582,13 @@
         },
         "overrides": []
       },
+      "id": 17,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 39
-      },
-      "id": 17
+      }
     },
     {
       "type": "timeseries",
@@ -620,26 +620,26 @@
         },
         "overrides": []
       },
+      "id": 18,
       "gridPos": {
         "h": 7,
         "w": 24,
         "x": 0,
         "y": 47
-      },
-      "id": 18
+      }
     },
     {
       "type": "row",
       "title": "Stage timing",
       "collapsed": false,
       "panels": [],
+      "id": 19,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 54
-      },
-      "id": 19
+      }
     },
     {
       "id": 20,
@@ -762,16 +762,16 @@
     },
     {
       "type": "row",
-      "title": "Inference and GPU lanes",
+      "title": "GPU lane",
       "collapsed": false,
       "panels": [],
+      "id": 23,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 72
-      },
-      "id": 23
+      }
     },
     {
       "id": 24,
@@ -918,8 +918,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Lane wait p95",
-      "description": "Enqueue to start on an endpoint's lane queue (S7): how long batch inference waited for the GPU. A slow sync with a long wait here is a busy GPU, not a slow model.",
+      "title": "GPU lane wait p95",
+      "description": "Enqueue to start on an endpoint's GPU lane queue (S7); `lane` is the model sublane (analysis, ingestion): how long batch inference waited for the GPU. A slow sync with a long wait here is a busy GPU, not a slow model.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -942,13 +942,13 @@
         },
         "overrides": []
       },
+      "id": 28,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 89
-      },
-      "id": 28
+      }
     },
     {
       "type": "timeseries",
@@ -975,26 +975,26 @@
         },
         "overrides": []
       },
+      "id": 29,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 89
-      },
-      "id": 29
+      }
     },
     {
       "type": "row",
       "title": "CPU lane",
       "collapsed": false,
       "panels": [],
+      "id": 30,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
         "y": 97
-      },
-      "id": 30
+      }
     },
     {
       "id": 31,
@@ -1093,13 +1093,13 @@
         },
         "overrides": []
       },
+      "id": 33,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
         "y": 106
-      },
-      "id": 33
+      }
     },
     {
       "type": "timeseries",
@@ -1131,17 +1131,17 @@
         },
         "overrides": []
       },
+      "id": 34,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
         "y": 106
-      },
-      "id": 34
+      }
     },
     {
       "type": "row",
-      "title": "Hosts",
+      "title": "DB lane",
       "collapsed": false,
       "panels": [],
       "gridPos": {
@@ -1151,6 +1151,136 @@
         "y": 114
       },
       "id": 35
+    },
+    {
+      "type": "timeseries",
+      "title": "DB busy by table",
+      "description": "Seconds of database work per second, by table and statement (`db_lane_busy_seconds_total`) — each SQL statement's engine-measured time, counted once. The number a cloud database would multiply: a table near the top here is where added latency lands first. `none` is a statement naming no table (BEGIN, COMMIT, some raw SQL).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(8, sum by (table, statement) (rate(db_lane_busy_seconds_total[5m])))",
+          "legendFormat": "{{table}} {{statement}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 60,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 115
+      },
+      "id": 36
+    },
+    {
+      "type": "timeseries",
+      "title": "Pool wait and query time p95",
+      "description": "`wait` is time a query waited for a pool connection — the DB lane's queue, the way lane wait is the GPU lane's. Near zero means the pool is not the bottleneck; a rising wait with flat query time means raise `PRISMA_CONNECTION_LIMIT` (or lower concurrency), a rising query time means the database itself.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (job, le) (rate(db_lane_wait_seconds_bucket[5m])))",
+          "legendFormat": "{{job}} wait"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (job, le) (rate(db_lane_query_seconds_bucket[5m])))",
+          "legendFormat": "{{job}} query"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 115
+      },
+      "id": 37
+    },
+    {
+      "type": "timeseries",
+      "title": "Connections busy vs pool size",
+      "description": "Busy connections against the pool's bound (`PRISMA_CONNECTION_LIMIT`, or Prisma's default `num_cpus*2+1`). Pinned at the bound is the DB lane saturated.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (service) (db_pool_connections_busy)",
+          "legendFormat": "{{service}} busy"
+        },
+        {
+          "refId": "B",
+          "expr": "max by (service) (db_lane_pool_size)",
+          "legendFormat": "{{service}} pool size"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 123
+      },
+      "id": 38
+    },
+    {
+      "type": "row",
+      "title": "Hosts",
+      "collapsed": false,
+      "panels": [],
+      "id": 39,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 130
+      }
     },
     {
       "type": "table",
@@ -1199,13 +1329,13 @@
         "defaults": {},
         "overrides": []
       },
+      "id": 40,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 115
-      },
-      "id": 36
+        "y": 131
+      }
     },
     {
       "type": "timeseries",
@@ -1233,31 +1363,31 @@
         },
         "overrides": []
       },
+      "id": 41,
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 115
-      },
-      "id": 37
+        "y": 131
+      }
     },
     {
       "type": "row",
-      "title": "Fetch",
+      "title": "Network lane",
       "collapsed": false,
       "panels": [],
+      "id": 42,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 123
-      },
-      "id": 38
+        "y": 139
+      }
     },
     {
       "type": "timeseries",
       "title": "Fetches in flight",
-      "description": "Busy fetch-seconds per second — the average number of fetches in flight. The detail crawl now runs `DETAIL_FETCH_CONCURRENCY` (default 4) at once, still bounded per host by the S1 token bucket, so this should rise during a crawl where it used to sit at or below 1.",
+      "description": "Busy fetch-seconds per second — the average number of fetches in flight. The network lane runs the detail crawl and the civics crawl at `NETWORK_LANE_CONCURRENCY` (default 4) at once, still bounded per host by the S1 token bucket, so this should rise during a crawl where it used to sit at or below 1.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1280,13 +1410,13 @@
         },
         "overrides": []
       },
+      "id": 43,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 124
-      },
-      "id": 39
+        "y": 140
+      }
     },
     {
       "type": "timeseries",
@@ -1315,13 +1445,13 @@
         },
         "overrides": []
       },
+      "id": 44,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 124
-      },
-      "id": 40
+        "y": 140
+      }
     },
     {
       "type": "timeseries",
@@ -1354,13 +1484,13 @@
         },
         "overrides": []
       },
+      "id": 45,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 124
-      },
-      "id": 41
+        "y": 140
+      }
     }
   ],
   "templating": {
