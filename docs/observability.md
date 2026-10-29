@@ -85,8 +85,11 @@ companion to Sync Pipeline's log view. Rows:
   where each archived PDF's text came from (`reused`, `lane`, `in_process`).
 - **Child-job queues** — waiting, oldest-waiting, attempts by outcome and job
   duration, per BullMQ queue. A queue that only grows has no consumer.
-- **Stage timing**, **Inference and GPU lanes**, **CPU lane** (worker CPU
-  against its container limit, `pdf-parse` jobs by host), **Hosts**, **Fetch**.
+- **Stage timing**, **GPU lane**, **CPU lane** (worker CPU against its
+  container limit, `pdf-parse` jobs by host), **DB lane** (pool wait and
+  query p95, busy connections against the pool size, DB time by table),
+  **Hosts**, **Network lane**. Lanes are named for the resource they consume;
+  each model (analysis, ingestion) is a sublane of the GPU lane.
 
 `worker_host` comes from `WORKER_HOST` (region-worker sets `primary`); panels
 that split by it fall back to the job name where it is unset. The CPU lane can
@@ -103,7 +106,9 @@ the site feels slow but nothing is down.
 - GraphQL operation rate
 - DB pool busy vs idle. Busy pinned at the ceiling means requests are queueing
   for a connection, usually a slow query rather than genuine load
-- DB query duration p95, which moves before request latency does
+- DB query duration p95 (`db_lane_query_seconds`), which moves before
+  request latency does. Until the backend release that adds the DB lane this
+  panel read nothing: its old metric was declared but never recorded
 - Circuit breaker state (0 closed, 1 half-open, 2 open)
 
 ## Changing a dashboard
