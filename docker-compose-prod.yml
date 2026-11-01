@@ -291,6 +291,15 @@ x-llm-env: &llm-env
   # model there, and the backend warns about precisely that at boot.
   LLM_INGESTION_MODEL: ${LLM_INGESTION_MODEL:-}
   LLM_INGESTION_URL: ${LLM_INGESTION_URL:-}
+  # Context window in tokens, i.e. Ollama's `num_ctx`. These were set in .env
+  # but never reached a container: compose reads .env only to fill in values
+  # this file names, and none named them. Unset, a node sends no num_ctx and a
+  # GGUF build silently reads the first 16,386 tokens of a long input (see
+  # environments/.env.production.example). EMPTY falls through, as for the
+  # models above: ingestion → analysis → LLM_CONTEXT_TOKENS.
+  LLM_ANALYSIS_CONTEXT_TOKENS: ${LLM_ANALYSIS_CONTEXT_TOKENS:-}
+  LLM_INGESTION_CONTEXT_TOKENS: ${LLM_INGESTION_CONTEXT_TOKENS:-}
+  LLM_CONTEXT_TOKENS: ${LLM_CONTEXT_TOKENS:-}
 
 # The background LLM services: region, region-worker, structural-analysis-worker
 # and llm-rerank-worker. Not merged into documents or knowledge, which answer
@@ -299,11 +308,12 @@ x-background-llm-env: &background-llm-env
   # 600s, as on UAT. Background generation runs well past the provider's 60s
   # default: a minutes summary took 66s at a 2000-token cap.
   OLLAMA_REQUEST_TIMEOUT_MS: "${OLLAMA_REQUEST_TIMEOUT_MS:-600000}"
-  # Minutes summary output cap (opuspopuli meetings-phase-b.md §3). At 2000,
-  # 7 of 37 summaries were cut off mid-JSON. It is in the summary skip key, so
-  # region and region-worker must agree, and changing it regenerates every
-  # summary once.
-  MINUTES_SUMMARY_MAX_TOKENS: "${MINUTES_SUMMARY_MAX_TOKENS:-4000}"
+  # Minutes summary output cap (opuspopuli meetings-phase-b.md §3, §4c). At
+  # 2000, 7 of 37 summaries were cut off mid-JSON; at 4000, a 25-claim journal
+  # still was. It is in the summary skip key, so region and region-worker must
+  # agree (each logs it at startup, and the worker warns when they differ),
+  # and changing it regenerates every summary once.
+  MINUTES_SUMMARY_MAX_TOKENS: "${MINUTES_SUMMARY_MAX_TOKENS:-8000}"
 
 services:
   # ---------------------------------------------------------------------------
