@@ -292,6 +292,19 @@ x-llm-env: &llm-env
   LLM_INGESTION_MODEL: ${LLM_INGESTION_MODEL:-}
   LLM_INGESTION_URL: ${LLM_INGESTION_URL:-}
 
+# The background LLM services: region, region-worker, structural-analysis-worker
+# and llm-rerank-worker. Not merged into documents or knowledge, which answer
+# user requests and should fail fast.
+x-background-llm-env: &background-llm-env
+  # 600s, as on UAT. Background generation runs well past the provider's 60s
+  # default: a minutes summary took 66s at a 2000-token cap.
+  OLLAMA_REQUEST_TIMEOUT_MS: "${OLLAMA_REQUEST_TIMEOUT_MS:-600000}"
+  # Minutes summary output cap (opuspopuli meetings-phase-b.md §3). At 2000,
+  # 7 of 37 summaries were cut off mid-JSON. It is in the summary skip key, so
+  # region and region-worker must agree, and changing it regenerates every
+  # summary once.
+  MINUTES_SUMMARY_MAX_TOKENS: "${MINUTES_SUMMARY_MAX_TOKENS:-4000}"
+
 services:
   # ---------------------------------------------------------------------------
   # Cloudflare Tunnel
@@ -849,7 +862,7 @@ services:
     container_name: opuspopuli-region
     logging: *logging
     environment:
-      <<: [*backend-env, *llm-env]
+      <<: [*backend-env, *llm-env, *background-llm-env]
       APPLICATION: region
       DESCRIPTION: Region microservice
       PORT: 8080
@@ -882,7 +895,7 @@ services:
     container_name: opuspopuli-region-worker
     logging: *logging
     environment:
-      <<: [*backend-env, *llm-env]
+      <<: [*backend-env, *llm-env, *background-llm-env]
       APPLICATION: region-worker
       DESCRIPTION: Region worker (async job processor)
       PORT: 8080
@@ -930,7 +943,7 @@ services:
     container_name: opuspopuli-structural-analysis-worker
     logging: *logging
     environment:
-      <<: [*backend-env, *llm-env]
+      <<: [*backend-env, *llm-env, *background-llm-env]
       APPLICATION: structural-analysis-worker
       DESCRIPTION: Structural analysis worker (async manifest analysis)
       PORT: 8080
@@ -958,7 +971,7 @@ services:
     container_name: opuspopuli-llm-rerank-worker
     logging: *logging
     environment:
-      <<: [*backend-env, *llm-env]
+      <<: [*backend-env, *llm-env, *background-llm-env]
       APPLICATION: llm-rerank-worker
       DESCRIPTION: LLM re-rank worker (personalized feed nightly batch, opuspopuli#745)
       PORT: 8080
