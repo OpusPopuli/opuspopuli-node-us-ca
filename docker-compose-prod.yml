@@ -300,6 +300,23 @@ x-llm-env: &llm-env
   LLM_ANALYSIS_CONTEXT_TOKENS: ${LLM_ANALYSIS_CONTEXT_TOKENS:-}
   LLM_INGESTION_CONTEXT_TOKENS: ${LLM_INGESTION_CONTEXT_TOKENS:-}
   LLM_CONTEXT_TOKENS: ${LLM_CONTEXT_TOKENS:-}
+  # Host memory gate (opuspopuli#1434): before LOADING a model, the backend
+  # asks the host probe whether there is room for it plus the headroom.
+  # Ollama sizes a load against the GPU budget, not against what the rest of
+  # the node holds, and on unified memory those are the same bytes. A load
+  # into a full host froze a 48 GB dev Mac several times on 2026-11-07.
+  # create-op-node bootstrap installs the probe
+  # (scripts/host-memory-probe/install.sh) before the stack starts.
+  #
+  # FAIL CLOSED: set and not answering means no model loads, and each LLM
+  # service warns naming this URL. `create-op-node verify` checks the probe.
+  # Set LLM_HOST_MEMORY_URL= (empty) in .env to turn the gate off.
+  LLM_HOST_MEMORY_URL: ${LLM_HOST_MEMORY_URL-http://host.docker.internal:11500/memory}
+  LLM_HOST_HEADROOM_GB: ${LLM_HOST_HEADROOM_GB:-4}
+  # Must equal the host Ollama's OLLAMA_MAX_LOADED_MODELS: at that many
+  # loaded, a load evicts one, and the gate counts the memory freed.
+  # create-op-node writes the value it reads from Ollama (default 3).
+  LLM_HOST_MAX_LOADED_MODELS: ${LLM_HOST_MAX_LOADED_MODELS:-3}
 
 # The background LLM services: region, region-worker, structural-analysis-worker
 # and llm-rerank-worker. Not merged into documents or knowledge, which answer

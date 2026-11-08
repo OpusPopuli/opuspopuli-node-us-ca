@@ -280,6 +280,30 @@ curl -X POST http://localhost:11434/api/generate \
      -d '{"model":"qwen3.5:35b","prompt":"hi","stream":false}'
 ```
 
+### 7a. Host memory probe (≈ 2 min, before the stack)
+
+The backend refuses to **load** a model when the Studio has no room for it
+(opuspopuli#1434). Ollama sizes a load against the GPU budget, not against
+what Docker and everything else already hold, and on unified memory those are
+the same bytes. The probe tells the containers what the host can spare.
+`create-op-node bootstrap` installs it. By hand:
+
+```bash
+scripts/host-memory-probe/install.sh      # launchd agent, 127.0.0.1:11500
+curl -s http://127.0.0.1:11500/memory     # {"reclaimableBytes":…}
+```
+
+- **It fails closed.** With `LLM_HOST_MEMORY_URL` set (the compose default)
+  and the probe not answering, no model loads, and the LLM services warn
+  naming the URL. `create-op-node verify` checks it.
+- **Order matters on an existing node.** Install the probe *before* deploying
+  backend images that carry the gate (the first release after v1.28.0).
+- **`LLM_HOST_MAX_LOADED_MODELS` must equal Ollama's
+  `OLLAMA_MAX_LOADED_MODELS`** (3 when unset). `create-op-node` writes it from
+  what Ollama is running with.
+- **Re-run `install.sh`** after upgrading Node or pulling a new probe. Remove
+  the probe with `install.sh --uninstall`.
+
 ---
 
 ## Phase 8 — Pull + start the stack (≈ 20 min)
