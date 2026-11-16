@@ -633,7 +633,10 @@ services:
       POSTGREST_URL: http://supabase-rest:3000
       PGRST_JWT_SECRET: ${JWT_SECRET}
       DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@opuspopuli-db:5432/${POSTGRES_DB:-postgres}
-      FILE_SIZE_LIMIT: 52428800
+      # Server-wide cap; the lower of this and a bucket's file_size_limit wins.
+      # 3 GiB lets bulk-archives keep a 1.6 GB bulk export (opuspopuli#1447).
+      # documents is pinned at 50 MB below and by opuspopuli's 98_storage_buckets.sql.
+      FILE_SIZE_LIMIT: 3221225472
       STORAGE_BACKEND: file
       FILE_STORAGE_BACKEND_PATH: /var/lib/storage
       TENANT_ID: stub
@@ -785,7 +788,7 @@ services:
       - sh
       - -c
       - |
-        psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -c "insert into storage.buckets (id, name, public) values ('documents', 'documents', false) on conflict (id) do nothing;"
+        psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -c "insert into storage.buckets (id, name, public, file_size_limit) values ('documents', 'documents', false, 52428800) on conflict (id) do update set file_size_limit = coalesce(storage.buckets.file_size_limit, 52428800);"
     networks:
       - opuspopuli-network
     deploy:
