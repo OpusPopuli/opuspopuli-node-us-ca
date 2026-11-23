@@ -482,13 +482,17 @@ services:
     container_name: opuspopuli-supabase-kong
     logging: *logging
     restart: unless-stopped
-    # Publish kong on the host so SUPABASE_URL=http://localhost:8000 works
-    # for browsers + platform services running outside this compose, and
-    # so the Cloudflare Tunnel (cloudflared on the host) can reach it.
+    # Published on loopback so SUPABASE_URL=http://localhost:8000 works for
+    # tools on the node itself. The Cloudflare tunnel no longer needs the
+    # host port: cloudflared runs as a container and routes auth-<region> to
+    # http://opuspopuli-supabase-kong:8000 over opuspopuli-network.
+    # Loopback by default for the same reason as the gateway: on 0.0.0.0 the
+    # Supabase API was reachable from the node's whole network
+    # (OpusPopuli/opuspopuli#1456). KONG_BIND_ADDR widens it deliberately.
     # 8000 = HTTP proxy listener; 8443 = HTTPS proxy listener.
     ports:
-      - '${KONG_HTTP_PORT:-8000}:8000/tcp'
-      - '${KONG_HTTPS_PORT:-8443}:8443/tcp'
+      - '${KONG_BIND_ADDR:-127.0.0.1}:${KONG_HTTP_PORT:-8000}:8000/tcp'
+      - '${KONG_BIND_ADDR:-127.0.0.1}:${KONG_HTTPS_PORT:-8443}:8443/tcp'
     networks:
       opuspopuli-network:
         aliases:
@@ -1046,8 +1050,19 @@ services:
       DESCRIPTION: API Gateway
       PORT: 8080
       MICROSERVICES: '[{"name":"users","url":"http://users:8080/graphql"},{"name":"documents","url":"http://documents:8080/graphql"},{"name":"knowledge","url":"http://knowledge:8080/graphql"},{"name":"region","url":"http://region:8080/graphql"}]'
+    # Loopback only (OpusPopuli/opuspopuli#1456). The Cloudflare tunnel
+    # reaches the gateway over opuspopuli-network (http://api:8080) and never
+    # uses this host port; it exists for health checks and SSH port-forwards
+    # on the node itself.
+    #
+    # Published on 0.0.0.0, it let anyone on the node's network bypass the
+    # gateway's per-client rate limits. Docker Desktop presents every peer
+    # on a published port as 192.168.65.1, a private address the gateway
+    # trusts as a proxy, so a direct client could set cf-connecting-ip and
+    # choose its own key on every request. Widen API_BIND_ADDR only for a
+    # deliberate reason, and never to an address reachable from the LAN.
     ports:
-      - "8080:8080"
+      - "${API_BIND_ADDR:-127.0.0.1}:8080:8080"
     depends_on:
       users:
         condition: service_healthy
