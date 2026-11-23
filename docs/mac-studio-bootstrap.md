@@ -346,7 +346,7 @@ The prod compose already references `ghcr.io/opuspopuli/<service>:${TAG:-latest}
    region) are reachable only on the internal compose network, so health-check
    them via the API gateway and check the published ports directly:
    ```bash
-   # API gateway (published on host port 8080) — the gateway's own health:
+   # API gateway (published on the node's loopback, 127.0.0.1:8080) — its own health:
    curl -fsS http://localhost:8080/health && echo          # {"status":"ok"}
 
    # prompt-service (published on 127.0.0.1:3210):
