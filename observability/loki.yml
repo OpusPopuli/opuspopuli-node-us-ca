@@ -54,6 +54,12 @@ limits_config:
   ingestion_burst_size_mb: 20
   max_streams_per_user: 10000
   max_entries_limit_per_query: 5000
+  # Delete logs after 30 days (opuspopuli#1460, owner decision 2026-11-23).
+  # The compactor below has had retention_enabled since the start, but with no
+  # period set Loki's default is 0s, which means keep forever. Request logs
+  # carried visitor IPs, so "forever" was a CCPA retention problem, not just
+  # disk.
+  retention_period: 720h
 
 # Compactor settings
 compactor:
